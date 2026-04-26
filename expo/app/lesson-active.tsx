@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Circle, CheckCircle, Users, ThumbsUp, HandHelping, EyeOff, Volume2, FileX, BookOpen, Check, X, Clock, Search, UserX, Timer } from 'lucide-react-native';
+import { Circle, CheckCircle, Users, ThumbsUp, HandHelping, EyeOff, Volume2, FileX, BookOpen, Check, X, Clock, Search, UserX, Timer, Activity } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwake, deactivateKeepAwake } from 'expo-keep-awake';
 import Colors from '@/constants/colors';
@@ -21,6 +21,7 @@ import { useApp } from '@/context/AppContext';
 import type { ParticipationRating, ParticipationReason, HomeworkStatus } from '@/types';
 import AppButton from '@/components/ui/AppButton';
 import AppCard from '@/components/ui/AppCard';
+import { useLessonTimer } from '@/hooks/useLessonTimer';
 
 interface ReasonOption {
   reason: ParticipationReason;
@@ -343,11 +344,114 @@ function getHomeworkLabel(status: HomeworkStatus): string {
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-App Live Activity Banner (fallback for ActivityKit / Foreground Service)
+// ---------------------------------------------------------------------------
+function InAppActivityBanner({
+  timer,
+  ratedCount,
+  totalCount,
+  className,
+}: {
+  timer: string;
+  ratedCount: number;
+  totalCount: number;
+  className: string;
+}) {
+  const slideAnim = useRef(new Animated.Value(-80)).current;
+  const opacityAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.spring(slideAnim, { toValue: 0, friction: 9, tension: 80, useNativeDriver: true }),
+      Animated.timing(opacityAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
+    ]).start();
+  }, [slideAnim, opacityAnim]);
+
+  const progress = totalCount > 0 ? ratedCount / totalCount : 0;
+  const progressAnim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(progressAnim, { toValue: progress, duration: 400, useNativeDriver: false }).start();
+  }, [progress, progressAnim]);
+
+  return (
+    <Animated.View
+      style={[
+        bannerStyles.wrap,
+        { transform: [{ translateY: slideAnim }], opacity: opacityAnim },
+      ]}
+    >
+      <View style={bannerStyles.left}>
+        <View style={bannerStyles.dot} />
+        <View>
+          <Text style={bannerStyles.label}>Unterricht läuft</Text>
+          <Text style={bannerStyles.className} numberOfLines={1}>{className}</Text>
+        </View>
+      </View>
+      <View style={bannerStyles.right}>
+        <Text style={bannerStyles.timer}>{timer}</Text>
+        <Text style={bannerStyles.count}>{ratedCount}/{totalCount}</Text>
+      </View>
+      <Animated.View
+        style={[
+          bannerStyles.progressBar,
+          {
+            width: progressAnim.interpolate({
+              inputRange: [0, 1],
+              outputRange: ['0%', '100%'],
+              extrapolate: 'clamp',
+            }),
+          },
+        ]}
+      />
+    </Animated.View>
+  );
+}
+
+const bannerStyles = StyleSheet.create({
+  wrap: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 18,
+    backgroundColor: Colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    overflow: 'hidden',
+    ...Platform.select({
+      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 16 },
+      android: { elevation: 10 },
+      default: {},
+    }),
+  },
+  left: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
+  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#A8F0C8' },
+  label: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)', letterSpacing: 0.3 },
+  className: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', marginTop: 1 },
+  right: { alignItems: 'flex-end', gap: 1 },
+  timer: { fontSize: 18, fontWeight: '700', color: '#FFFFFF', fontVariant: ['tabular-nums'] as any },
+  count: { fontSize: 11, fontWeight: '500', color: 'rgba(255,255,255,0.7)' },
+  progressBar: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    height: 3,
+    backgroundColor: 'rgba(255,255,255,0.4)',
+    borderRadius: 2,
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Main Screen
+// ---------------------------------------------------------------------------
 export default function LessonActiveScreen() {
   const router = useRouter();
   const { data, isAuthenticated, rateStudent, rateHomework, markAbsent, markLate, endSession } = useApp();
   const session = data.activeSession;
   const isTeachingMode = Boolean(session);
+  const timerStr = useLessonTimer(session?.startedAt ?? null);
   const [openMenuStudentId, setOpenMenuStudentId] = useState<string | null>(null);
   const [openMenuType, setOpenMenuType] = useState<'+' | '-' | null>(null);
   const [homeworkMode, setHomeworkMode] = useState<boolean>(false);
@@ -583,6 +687,14 @@ export default function LessonActiveScreen() {
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.container} edges={['top']}>
+        {/* Live Activity Banner */}
+        <InAppActivityBanner
+          timer={timerStr}
+          ratedCount={ratedCount}
+          totalCount={activeTotal}
+          className={currentClass.name}
+        />
+
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View style={styles.headerLeft}>
@@ -608,6 +720,26 @@ export default function LessonActiveScreen() {
               </View>
             )}
           </View>
+
+          {/* Stats chips row */}
+          {!homeworkMode && (
+            <View style={styles.statsRow}>
+              <View style={styles.statChip}>
+                <Timer size={11} color={Colors.primary} strokeWidth={2} />
+                <Text style={styles.statChipText}>{timerStr}</Text>
+              </View>
+              <View style={styles.statChip}>
+                <CheckCircle size={11} color={Colors.positive} strokeWidth={2} />
+                <Text style={[styles.statChipText, { color: Colors.positive }]}>{ratedCount} bewertet</Text>
+              </View>
+              {absentCount > 0 && (
+                <View style={[styles.statChip, { backgroundColor: Colors.negativeLight }]}>
+                  <UserX size={11} color={Colors.negative} strokeWidth={2} />
+                  <Text style={[styles.statChipText, { color: Colors.negative }]}>{absentCount} abwesend</Text>
+                </View>
+              )}
+            </View>
+          )}
 
           {homeworkMode ? (
             <View style={styles.progressWrap}>
@@ -946,12 +1078,38 @@ const styles = StyleSheet.create({
   },
   header: {
     paddingHorizontal: 20,
-    paddingTop: 16,
+    paddingTop: 12,
     paddingBottom: 16,
     backgroundColor: Colors.white,
-    borderBottomWidth: 0.5,
-    borderBottomColor: Colors.divider,
+    borderBottomWidth: 0,
     zIndex: 10,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.07, shadowRadius: 12 },
+      android: { elevation: 4 },
+      default: {},
+    }),
+  },
+  statsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 12,
+    flexWrap: 'wrap',
+  },
+  statChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 100,
+    backgroundColor: Colors.primaryLight,
+  },
+  statChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.primary,
+    fontVariant: ['tabular-nums'] as any,
   },
   headerTop: {
     flexDirection: 'row',
@@ -1031,14 +1189,14 @@ const styles = StyleSheet.create({
   },
   progressBar: {
     flex: 1,
-    height: 6,
-    borderRadius: 100,         // RADIUS.pill
+    height: 8,
+    borderRadius: 100,
     backgroundColor: Colors.inputBg,
     overflow: 'hidden',
   },
   progressFill: {
-    height: 6,
-    borderRadius: 100,         // RADIUS.pill
+    height: 8,
+    borderRadius: 100,
     backgroundColor: Colors.primary,
   },
   homeworkProgressFill: {
@@ -1048,7 +1206,7 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600' as const,
     color: Colors.textSecondary,
-    minWidth: 32,
+    minWidth: 36,
     textAlign: 'right' as const,
   },
   homeworkLegend: {
@@ -1110,11 +1268,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     backgroundColor: Colors.white,
-    borderRadius: 20,          // RADIUS.lg
+    borderRadius: 22,
     padding: 14,
     ...Platform.select({
-      ios: { shadowColor: Colors.shadow, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 4 },
-      android: { elevation: 1 },
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.09, shadowRadius: 10 },
+      android: { elevation: 3 },
       default: {},
     }),
   },
