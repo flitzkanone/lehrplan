@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { X, FileText, FileSpreadsheet, FileJson, Check } from 'lucide-react-native';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import XLSX from 'xlsx';
@@ -308,7 +308,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: UI.spacing.lg,
     borderBottomWidth: 1,
-    borderBottomColor: Colors.border,
+    borderBottomColor: Colors.divider,
   },
   title: {
     ...UI.font.title,
@@ -382,6 +382,6 @@ const styles = StyleSheet.create({
     padding: UI.spacing.lg,
     paddingBottom: 40,
     borderTopWidth: 1,
-    borderTopColor: Colors.border,
+    borderTopColor: Colors.divider,
   },
 });

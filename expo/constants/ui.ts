@@ -56,6 +56,11 @@ export const UI = {
       fontWeight: '600' as const,
       letterSpacing: -0.2,
     },
+    headline: {
+      fontSize: 17,
+      fontWeight: '600' as const,
+      letterSpacing: -0.3,
+    },
     small: {
       fontSize: 14,
       fontWeight: '400' as const,

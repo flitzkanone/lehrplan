@@ -63,7 +63,7 @@ function TabBarButton({
       testID={options.tabBarTestID}
       onPress={(e) => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-        onPress(e);
+        onPress();
       }}
       onLongPress={onLongPress}
       onPressIn={handlePressIn}

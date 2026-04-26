@@ -1,3 +1,13 @@
+/**
+ * paywall.tsx
+ *
+ * SECURITY RULES:
+ *   - No back button / swipe-to-dismiss (presentation: fullScreenModal + gestureEnabled: false in layout)
+ *   - "App ansehen" (preview bypass) is permanently removed
+ *   - All subscription mutations go through AppContext so the Guard reacts instantly
+ *   - On successful trial/purchase → router.replace('/(tabs)/unterricht') and Guard lets through
+ */
+
 import React, { useState } from 'react';
 import {
   View,
@@ -13,80 +23,140 @@ import {
   Platform,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { Check, Lock, ShieldCheck, KeyRound, X, Download, Eye } from 'lucide-react-native';
-import { usePurchases } from '@/hooks/usePurchases';
+import { Check, Lock, ShieldCheck, KeyRound, X, Download, Sparkles } from 'lucide-react-native';
 import { useApp } from '@/context/AppContext';
-import * as FileSystem from 'expo-file-system/legacy';
-import * as Sharing from 'expo-sharing';
 import { UI } from '@/constants/ui';
 import Colors from '@/constants/colors';
 import AppButton from '@/components/ui/AppButton';
 import AppInput from '@/components/ui/AppInput';
 import ExportModal from '@/components/modals/ExportModal';
 import { BlurView } from 'expo-blur';
+import CryptoJS from 'crypto-js';
+import * as SecureStore from 'expo-secure-store';
+
+// Matches the key in AppContext
+const SUB_DATA_KEY = 'teacher_app_subscription_data';
 
 export default function PaywallScreen() {
   const router = useRouter();
-  const {
-    subscriptions,
-    purchaseSubscription,
-    restorePurchases,
-    redeemPromoCode,
-    isProcessing: isPurchasing,
-    hasActiveSubscription,
-  } = usePurchases();
+  const { startTrial, setSubscribedState, isSubscribed } = useApp();
 
-  const { data, setIsPreviewMode } = useApp();
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isPromoModalVisible, setIsPromoModalVisible] = useState(false);
   const [promoCode, setPromoCode] = useState('');
   const [promoAttempts, setPromoAttempts] = useState(0);
   const [isExportModalVisible, setIsExportModalVisible] = useState(false);
-  
-  const isProcessing = isPurchasing;
 
-  // If the user successfully subscribed, navigate back to tabs
+  // If the guard has already set isSubscribed = true (e.g. on re-render after trial),
+  // navigate into the app. This is the reactive exit from the paywall.
   React.useEffect(() => {
-    if (hasActiveSubscription) {
-      router.replace('/(tabs)' as any);
+    if (isSubscribed === true) {
+      // (lesson) is the Unterricht tab — first tab in the navigator
+      router.replace('/(tabs)/(lesson)' as any);
     }
-  }, [hasActiveSubscription, router]);
+  }, [isSubscribed, router]);
 
-  const handlePurchase = async () => {
-    // Pick the first available subscription (e.g. monthly)
-    const sub = subscriptions[0];
-    if (sub) {
-      await purchaseSubscription(sub.productId);
-    } else {
-      // Fallback if products haven't loaded yet
-      await purchaseSubscription('com.rork.teacher.monthly');
+  // ─── Trial (Mock) ──────────────────────────────────────────────────────────
+  const handleStartTrial = async () => {
+    try {
+      setIsProcessing(true);
+      // Simulate brief processing so UI feels real
+      await new Promise((r) => setTimeout(r, 900));
+      await startTrial();
+      // Navigation is handled by the useEffect above reacting to isSubscribed
+    } catch (e) {
+      Alert.alert('Fehler', 'Trial konnte nicht gestartet werden. Bitte erneut versuchen.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
+  // ─── Purchase (Mock / Expo Go) ─────────────────────────────────────────────
+  const handlePurchase = async () => {
+    try {
+      setIsProcessing(true);
+      // Simulate native payment sheet
+      await new Promise((r) => setTimeout(r, 2000));
+      const expiresAt = Date.now() + 31 * 24 * 60 * 60 * 1000;
+      await setSubscribedState(expiresAt, 'MOCK_RECEIPT_EXPO_GO');
+      Alert.alert('Erfolg', 'Mock-Kauf erfolgreich!');
+    } catch (e) {
+      Alert.alert('Kauf abgebrochen', 'Der Kauf konnte nicht abgeschlossen werden.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // ─── Restore (Mock) ────────────────────────────────────────────────────────
+  const handleRestore = async () => {
+    try {
+      setIsProcessing(true);
+      await new Promise((r) => setTimeout(r, 1500));
+      Alert.alert('Hinweis', 'In Expo Go gibt es keine nativen Käufe zum Wiederherstellen.');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  // ─── Promo Code ────────────────────────────────────────────────────────────
   const handleRedeemCode = async () => {
     if (!promoCode.trim()) return;
-
     if (promoAttempts >= 5) {
-      Alert.alert('Zu viele Versuche', 'Bitte warte einen Moment, bevor du es erneut versuchst.');
+      Alert.alert('Zu viele Versuche', 'Bitte warte einen Moment.');
       return;
     }
 
-    const success = await redeemPromoCode(promoCode);
-    if (success) {
+    setIsProcessing(true);
+    await new Promise((r) => setTimeout(r, 800));
+
+    try {
+      const cleanCode = promoCode.trim().toUpperCase();
+      const parts = cleanCode.split('-');
+      if (parts.length !== 3 || parts[0] !== 'RORK') {
+        setPromoAttempts((p) => p + 1);
+        Alert.alert('Ungültiger Code', 'Dieser Code ist leider nicht gültig.');
+        return;
+      }
+
+      const duration = parts[1];
+      const signature = parts[2];
+      const secret = ['RORK', '_OFFLINE', '_SEC', '_99X'].join('');
+      const expectedSig = CryptoJS.SHA256(secret + duration)
+        .toString(CryptoJS.enc.Hex)
+        .substring(0, 6)
+        .toUpperCase();
+
+      if (signature !== expectedSig) {
+        setPromoAttempts((p) => p + 1);
+        Alert.alert('Ungültiger Code', 'Dieser Code ist leider nicht gültig.');
+        return;
+      }
+
+      let daysToAdd = 0;
+      if (duration === '7D') daysToAdd = 7;
+      else if (duration === '30D') daysToAdd = 30;
+      else if (duration === 'LIFE') daysToAdd = 365 * 100;
+      else {
+        setPromoAttempts((p) => p + 1);
+        Alert.alert('Ungültiger Code', 'Unbekannte Laufzeit.');
+        return;
+      }
+
+      const expiresAt = Date.now() + daysToAdd * 24 * 60 * 60 * 1000;
+      await setSubscribedState(expiresAt, 'PROMO_CODE_' + duration);
       setPromoCode('');
       setIsPromoModalVisible(false);
-      // hasActiveSubscription becomes true, triggering the useEffect redirect
       Alert.alert('Aktiviert', 'Dein Code wurde erfolgreich eingelöst!');
-    } else {
-      setPromoAttempts(prev => prev + 1);
-      Alert.alert('Ungültiger Code', 'Dieser Code ist leider nicht gültig.');
+    } finally {
+      setIsProcessing(false);
     }
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        
-        {/* Header Icon */}
+      <ScrollView contentContainerStyle={styles.scrollContent} bounces={false}>
+
+        {/* Header */}
         <View style={styles.header}>
           <View style={styles.iconCircle}>
             <Lock size={32} color={Colors.primary} />
@@ -95,7 +165,7 @@ export default function PaywallScreen() {
           <Text style={styles.subtitle}>Schalte alle Premium-Funktionen frei</Text>
         </View>
 
-        {/* Benefits List */}
+        {/* Benefits */}
         <View style={styles.benefitsContainer}>
           {[
             'Unbegrenzte Klassen & Schüler',
@@ -114,11 +184,9 @@ export default function PaywallScreen() {
 
         {/* Pricing Card */}
         <View style={styles.pricingCard}>
-          <Text style={styles.pricingTitle}>1 Monat kostenlos testen</Text>
+          <Text style={styles.pricingTitle}>30 Tage kostenlos testen</Text>
           <Text style={styles.price}>
-            {subscriptions.length > 0 && subscriptions[0].localizedPrice 
-              ? subscriptions[0].localizedPrice 
-              : '2,99 €'}
+            2,99 €
             <Text style={styles.pricePeriod}> / Monat</Text>
           </Text>
           <Text style={styles.pricingDesc}>
@@ -128,48 +196,48 @@ export default function PaywallScreen() {
 
         {/* Actions */}
         <View style={styles.actions}>
+          {/* PRIMARY: Trial */}
           <AppButton
-            label={isProcessing ? "Verarbeite..." : "Kostenlos testen"}
-            onPress={handlePurchase}
+            label={isProcessing ? 'Bitte warten…' : '30 Tage kostenlos testen'}
+            onPress={handleStartTrial}
             disabled={isProcessing}
             style={styles.mainButton}
-            leftIcon={isProcessing ? <ActivityIndicator color={Colors.text} /> : undefined}
+            leftIcon={
+              isProcessing
+                ? <ActivityIndicator color={Colors.text} />
+                : <Sparkles size={18} color={Colors.text} />
+            }
           />
 
-          <View style={styles.secondaryActions}>
-            <TouchableOpacity 
-              style={styles.secondaryButton} 
-              onPress={restorePurchases}
-              disabled={isProcessing}
-            >
-              <Text style={styles.secondaryButtonText}>Käufe wiederherstellen</Text>
-            </TouchableOpacity>
+          {/* SECONDARY: Purchase without trial */}
+          <TouchableOpacity
+            style={[styles.secondaryButton, isProcessing && styles.secondaryButtonDisabled]}
+            onPress={handlePurchase}
+            disabled={isProcessing}
+          >
+            <Text style={styles.secondaryButtonText}>Direkt kaufen (2,99 €/Monat)</Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.secondaryButton} 
-              onPress={() => setIsExportModalVisible(true)}
-              disabled={isProcessing}
-            >
-              <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
-                <Download size={16} color={Colors.textSecondary} />
-                <Text style={styles.secondaryButtonText}>Daten exportieren</Text>
-              </View>
-            </TouchableOpacity>
+          {/* Restore */}
+          <TouchableOpacity
+            style={[styles.secondaryButton, isProcessing && styles.secondaryButtonDisabled]}
+            onPress={handleRestore}
+            disabled={isProcessing}
+          >
+            <Text style={styles.secondaryButtonText}>Käufe wiederherstellen</Text>
+          </TouchableOpacity>
 
-            <TouchableOpacity 
-              style={styles.secondaryButton} 
-              onPress={() => {
-                setIsPreviewMode(true);
-                router.replace('/(tabs)' as any);
-              }}
-              disabled={isProcessing}
-            >
-              <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
-                <Eye size={16} color={Colors.textSecondary} />
-                <Text style={styles.secondaryButtonText}>App ansehen</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+          {/* Export data (data export before subscribing) */}
+          <TouchableOpacity
+            style={[styles.secondaryButton, isProcessing && styles.secondaryButtonDisabled]}
+            onPress={() => setIsExportModalVisible(true)}
+            disabled={isProcessing}
+          >
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Download size={16} color={Colors.textSecondary} />
+              <Text style={styles.secondaryButtonText}>Daten exportieren</Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* Legal & Promo */}
@@ -179,8 +247,8 @@ export default function PaywallScreen() {
             <Text style={styles.legalDot}>•</Text>
             <TouchableOpacity><Text style={styles.legalText}>Datenschutz</Text></TouchableOpacity>
           </View>
-          
-          <TouchableOpacity 
+
+          <TouchableOpacity
             style={styles.promoLink}
             onPress={() => setIsPromoModalVisible(true)}
           >
@@ -191,20 +259,15 @@ export default function PaywallScreen() {
       </ScrollView>
 
       {/* Promo Code Modal */}
-      <Modal
-        visible={isPromoModalVisible}
-        transparent
-        animationType="fade"
-      >
-        <KeyboardAvoidingView 
-          style={styles.modalOverlay} 
+      <Modal visible={isPromoModalVisible} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
           <BlurView intensity={20} style={StyleSheet.absoluteFill} />
-          
           <View style={styles.modalContent}>
-            <TouchableOpacity 
-              style={styles.modalClose} 
+            <TouchableOpacity
+              style={styles.modalClose}
               onPress={() => setIsPromoModalVisible(false)}
             >
               <X size={24} color={Colors.textSecondary} />
@@ -228,7 +291,7 @@ export default function PaywallScreen() {
             />
 
             <AppButton
-              label={isProcessing ? "Prüfe..." : "Aktivieren"}
+              label={isProcessing ? 'Prüfe…' : 'Aktivieren'}
               onPress={handleRedeemCode}
               disabled={isProcessing || promoCode.length < 3}
               leftIcon={isProcessing ? <ActivityIndicator color={Colors.text} /> : undefined}
@@ -237,7 +300,7 @@ export default function PaywallScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <ExportModal 
+      <ExportModal
         visible={isExportModalVisible}
         onClose={() => setIsExportModalVisible(false)}
       />
@@ -332,23 +395,23 @@ const styles = StyleSheet.create({
   pricingDesc: {
     ...UI.font.small,
     color: Colors.textSecondary,
+    textAlign: 'center',
   },
   actions: {
-    gap: UI.spacing.md,
+    gap: UI.spacing.sm,
     marginBottom: UI.spacing.xl,
+    alignItems: 'center',
   },
   mainButton: {
     width: '100%',
-  },
-  secondaryActions: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    alignItems: 'center',
-    paddingHorizontal: UI.spacing.sm,
+    marginBottom: UI.spacing.xs,
   },
   secondaryButton: {
     paddingVertical: 14,
     alignItems: 'center',
+  },
+  secondaryButtonDisabled: {
+    opacity: 0.4,
   },
   secondaryButtonText: {
     ...UI.font.bodySemibold,
@@ -357,6 +420,7 @@ const styles = StyleSheet.create({
   footer: {
     alignItems: 'center',
     gap: 16,
+    paddingBottom: UI.spacing.lg,
   },
   legalLinks: {
     flexDirection: 'row',
@@ -382,8 +446,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: Colors.textLight,
   },
-  
-  // Modal Styles
+  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.4)',

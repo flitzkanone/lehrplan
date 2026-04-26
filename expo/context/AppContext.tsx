@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import createContextHook from '@nkzw/create-context-hook';
 import CryptoJS from 'crypto-js';
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { Alert } from 'react-native';
 import { logModuleStarting, logModuleReady } from '@/utils/startupLogger';
 import { logAuditEvent } from '@/utils/auditLog';
 import type {
@@ -52,6 +53,22 @@ const BACKUP_MAGIC = 'teacher_app_backup_v1';
 const BACKUP_VERSION = 1;
 const BACKUP_DIR = `${FileSystem.documentDirectory}backups`;
 
+// ─── Subscription Storage Keys ────────────────────────────────────────────────
+const SUB_DATA_KEY = 'teacher_app_subscription_data';
+const TRIAL_DATA_KEY = 'teacher_app_trial_data';
+
+export interface SubscriptionData {
+  status: 'active' | 'expired';
+  expiresAt: number;
+  lastKnownTime: number;
+  storeReceipt: string | null;
+}
+
+export interface TrialData {
+  trialActive: boolean;
+  trialEndDate: number | null; // unix ms
+}
+
 const defaultData: AppData = {
   profile: { name: '', school: '', subjects: [] },
   classes: [],
@@ -76,6 +93,12 @@ export const [AppProvider, useApp] = createContextHook(() => {
   const [pinLength, setPinLength] = useState<number>(6);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
+
+  // ─── Subscription / Trial State ────────────────────────────────────────────
+  // null = not yet checked (loading), false = no sub, true = active
+  const [isSubscribed, setIsSubscribed] = useState<boolean | null>(null);
+  const [trialActive, setTrialActive] = useState<boolean>(false);
+  const [trialEndDate, setTrialEndDate] = useState<number | null>(null);
 
   const currentPinRef = useRef<string>('');
   const deviceSaltRef = useRef<string>('');
@@ -105,6 +128,50 @@ export const [AppProvider, useApp] = createContextHook(() => {
     }
   }, []);
 
+  // ─── Subscription / Trial Check ────────────────────────────────────────────
+  const checkSubscriptionStatus = useCallback(async () => {
+    try {
+      const now = Date.now();
+
+      // 1. Check paid subscription
+      const subStr = await SecureStore.getItemAsync(SUB_DATA_KEY);
+      if (subStr) {
+        const sub: SubscriptionData = JSON.parse(subStr);
+        if (sub.status === 'active' && now < sub.expiresAt) {
+          setIsSubscribed(true);
+          return;
+        }
+        // Expired — mark as expired in store
+        const expired: SubscriptionData = { ...sub, status: 'expired' };
+        await SecureStore.setItemAsync(SUB_DATA_KEY, JSON.stringify(expired));
+      }
+
+      // 2. Check trial
+      const trialStr = await AsyncStorage.getItem(TRIAL_DATA_KEY);
+      if (trialStr) {
+        const trial: TrialData = JSON.parse(trialStr);
+        if (trial.trialActive && trial.trialEndDate && now < trial.trialEndDate) {
+          setTrialActive(true);
+          setTrialEndDate(trial.trialEndDate);
+          setIsSubscribed(true); // trial counts as "subscribed" for access
+          return;
+        }
+        // Trial expired — reset
+        if (trial.trialActive) {
+          const expiredTrial: TrialData = { trialActive: false, trialEndDate: trial.trialEndDate };
+          await AsyncStorage.setItem(TRIAL_DATA_KEY, JSON.stringify(expiredTrial));
+          setTrialActive(false);
+          setTrialEndDate(null);
+        }
+      }
+
+      setIsSubscribed(false);
+    } catch (e) {
+      console.error('[Subscription] Check failed:', e);
+      setIsSubscribed(false);
+    }
+  }, []);
+
   useEffect(() => {
     const initApp = async () => {
       try {
@@ -119,6 +186,9 @@ export const [AppProvider, useApp] = createContextHook(() => {
 
         const privacy = await AsyncStorage.getItem(PRIVACY_ACCEPTED_KEY);
         setPrivacyAccepted(privacy === 'true');
+
+        // Always check subscription on boot
+        await checkSubscriptionStatus();
         
       } catch (e) {
         console.error('Initialization error:', e);
@@ -128,7 +198,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
       }
     };
     initApp();
-  }, []);
+  }, [checkSubscriptionStatus]);
 
   const saveToStorage = async (newData: AppData) => {
     if (!currentPinRef.current) return;
@@ -696,18 +766,41 @@ export const [AppProvider, useApp] = createContextHook(() => {
     setIsAuthenticated(false);
   }, []);
 
+  // ─── Start Trial (Mock) ────────────────────────────────────────────────────
+  const startTrial = useCallback(async () => {
+    const trialEnd = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+    const trialData: TrialData = { trialActive: true, trialEndDate: trialEnd };
+    await AsyncStorage.setItem(TRIAL_DATA_KEY, JSON.stringify(trialData));
+    setTrialActive(true);
+    setTrialEndDate(trialEnd);
+    setIsSubscribed(true);
+  }, []);
+
+  // ─── Set Subscribed (after real IAP purchase) ──────────────────────────────
+  const setSubscribedState = useCallback(async (expiresAt: number, receipt: string) => {
+    const subData: SubscriptionData = {
+      status: 'active',
+      expiresAt,
+      lastKnownTime: Date.now(),
+      storeReceipt: receipt,
+    };
+    await SecureStore.setItemAsync(SUB_DATA_KEY, JSON.stringify(subData));
+    setIsSubscribed(true);
+  }, []);
+
   const resetApp = useCallback(async () => {
     await AsyncStorage.multiRemove([
       LEGACY_STORAGE_KEY,
       STORAGE_KEY_CORE,
       STORAGE_KEY_CLASSES,
       STORAGE_KEY_HISTORY,
-      PRIVACY_ACCEPTED_KEY
+      PRIVACY_ACCEPTED_KEY,
+      TRIAL_DATA_KEY,
     ]);
     await SecureStore.deleteItemAsync(PIN_HASH_KEY);
     await SecureStore.deleteItemAsync(PIN_LENGTH_KEY);
     await SecureStore.deleteItemAsync(PIN_HASH_VERSION_KEY);
-    await SecureStore.deleteItemAsync('teacher_app_subscription_data');
+    await SecureStore.deleteItemAsync(SUB_DATA_KEY);
     
     currentPinRef.current = '';
     setData(defaultData);
@@ -715,6 +808,10 @@ export const [AppProvider, useApp] = createContextHook(() => {
     setPrivacyAccepted(false);
     setStoredPinHash('');
     setPinLength(6);
+    setIsSubscribed(false);
+    setTrialActive(false);
+    setTrialEndDate(null);
+    setIsPreviewMode(false);
   }, []);
 
   const acceptPrivacy = useCallback(async () => {
@@ -874,5 +971,12 @@ export const [AppProvider, useApp] = createContextHook(() => {
     listBackupFiles,
     isPreviewMode,
     setIsPreviewMode,
+    // Subscription / Trial
+    isSubscribed,
+    trialActive,
+    trialEndDate,
+    startTrial,
+    setSubscribedState,
+    checkSubscriptionStatus,
   };
 });

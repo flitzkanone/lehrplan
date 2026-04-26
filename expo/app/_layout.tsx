@@ -10,7 +10,6 @@ import FeatureTour from "@/components/FeatureTour";
 import { AppProvider, useApp } from "@/context/AppContext";
 import { TutorialProvider } from "@/context/TutorialContext";
 import { useAutoLock } from "@/hooks/useAutoLock";
-import { usePurchases } from "@/hooks/usePurchases";
 import {
   logAppBoot,
   logModuleStarting,
@@ -31,32 +30,46 @@ logAppBoot();
 function RootLayoutNav() {
   const router = useRouter();
   const segments = useSegments();
-  const { data, isAuthenticated, isLoading, storedPinHash, isPreviewMode } = useApp();
+  const { data, isAuthenticated, isLoading, storedPinHash, isSubscribed } = useApp();
   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
   const navigatorLogged = useRef(false);
   const { registerInteraction } = useAutoLock();
-  const { hasActiveSubscription } = usePurchases();
 
   const onboardingDone = data.onboardingComplete || !!storedPinHash;
 
   useEffect(() => {
-    if (isLoading || hasActiveSubscription === null) return;
-    const isOnboarding = (segments as string[])[0] === 'onboarding';
-    const isLock = segments[0] === 'lock';
-    const isPaywall = segments[0] === 'paywall';
+    // Wait until both app data AND subscription status have been resolved.
+    // isSubscribed === null means the check hasn't finished yet — show nothing.
+    if (isLoading || isSubscribed === null) return;
+
+    const seg = segments as string[];
+    const isOnboarding = seg[0] === 'onboarding';
+    const isLock      = seg[0] === 'lock';
+    const isPaywall   = seg[0] === 'paywall';
     const isProtected = !isOnboarding && !isLock && !isPaywall;
-    
+
+    // ── Step 1: Onboarding gate ───────────────────────────────────────────────
     if (!onboardingDone && isProtected) {
-      console.log('[AuthGuard] Redirecting to onboarding');
+      console.log('[Guard] → onboarding');
       router.replace('/onboarding' as any);
-    } else if (onboardingDone && !isAuthenticated && isProtected) {
-      console.log('[AuthGuard] Redirecting to lock');
-      router.replace('/lock' as any);
-    } else if (onboardingDone && isAuthenticated && hasActiveSubscription === false && !isPreviewMode && isProtected) {
-      console.log('[AuthGuard] Redirecting to paywall');
-      router.replace('/paywall' as any);
+      return;
     }
-  }, [isLoading, onboardingDone, isAuthenticated, hasActiveSubscription, isPreviewMode, segments, router]);
+
+    // ── Step 2: PIN lock gate ─────────────────────────────────────────────────
+    if (onboardingDone && !isAuthenticated && isProtected) {
+      console.log('[Guard] → lock');
+      router.replace('/lock' as any);
+      return;
+    }
+
+    // ── Step 3: Subscription gate (HARD — no preview bypass) ─────────────────
+    // Fired for every segment change: deep links, notifications, back-nav — all blocked.
+    if (onboardingDone && isAuthenticated && !isSubscribed && isProtected) {
+      console.log('[Guard] → paywall (no active subscription)');
+      router.replace('/paywall' as any);
+      return;
+    }
+  }, [isLoading, isSubscribed, onboardingDone, isAuthenticated, segments, router]);
 
   useEffect(() => {
     if (!navigatorLogged.current) {
@@ -85,9 +98,13 @@ function RootLayoutNav() {
 
     notificationListener.current = addNotificationResponseListener((response) => {
       console.log('[RootLayout] Notification response received:', response.actionIdentifier);
-      // Security: never allow deep navigation into protected routes while locked.
+      // Security: block all deep navigation if locked or unsubscribed.
       if (!isAuthenticated) {
         router.replace('/lock' as any);
+        return;
+      }
+      if (!isSubscribed) {
+        router.replace('/paywall' as any);
         return;
       }
       const data = response.notification.request.content.data;
@@ -108,7 +125,7 @@ function RootLayoutNav() {
         notificationListener.current.remove();
       }
     };
-  }, [isAuthenticated, router]);
+  }, [isAuthenticated, isSubscribed, router]);
 
   return (
     <View
@@ -123,7 +140,8 @@ function RootLayoutNav() {
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
         <Stack.Screen name="lock" options={{ presentation: "transparentModal", animation: "fade", gestureEnabled: false }} />
-        <Stack.Screen name="paywall" options={{ presentation: "modal", gestureEnabled: false }} />
+        {/* fullScreenModal prevents swipe-to-dismiss bypassing the paywall */}
+        <Stack.Screen name="paywall" options={{ presentation: "fullScreenModal", gestureEnabled: false }} />
         <Stack.Screen name="lesson-active" options={{ presentation: "modal", gestureEnabled: false }} />
       </Stack>
     </View>

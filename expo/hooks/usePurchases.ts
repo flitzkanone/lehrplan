@@ -1,3 +1,11 @@
+/**
+ * usePurchases.ts
+ *
+ * NOTE: Subscription state for the navigation guard and paywall is now owned
+ * by AppContext (isSubscribed, startTrial, setSubscribedState).
+ * This hook is kept as the integration point for the real react-native-iap
+ * library in a production build, but it no longer drives the guard.
+ */
 import { useState, useEffect, useCallback } from 'react';
 import { Platform, Alert } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
@@ -22,7 +30,9 @@ export interface SubscriptionData {
 }
 
 export function usePurchases() {
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  // Local product type — replaced by react-native-iap's Product type in production
+  type IAPProduct = { productId: string; title: string; description: string; localizedPrice: string; currency: string; price: string };
+  const [subscriptions, setSubscriptions] = useState<IAPProduct[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [hasActiveSubscription, setHasActiveSubscription] = useState<boolean | null>(null);
 

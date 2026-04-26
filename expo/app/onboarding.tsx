@@ -341,7 +341,8 @@ export default function OnboardingScreen() {
         }
         setIsSetupComplete(true);
         await new Promise((r) => setTimeout(r, 500));
-        router.replace('/');
+        // CRITICAL: always show paywall after onboarding, never go directly into the app.
+        router.replace('/paywall' as any);
       } catch (e) {
         Alert.alert('Fehler', 'Einrichtungsfehler: ' + String(e));
         setStep('subjects');
