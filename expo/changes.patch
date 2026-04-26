@@ -1,0 +1,1890 @@
+diff --git a/expo/app.json b/expo/app.json
+index 37dcb3f..4543abd 100644
+--- a/expo/app.json
++++ b/expo/app.json
+@@ -39,10 +39,11 @@
+       ],
+       "expo-font",
+       "expo-web-browser",
+-      "expo-secure-store"
++      "expo-secure-store",
++      "react-native-iap"
+     ],
+     "experiments": {
+       "typedRoutes": true
+     }
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/expo/app/(tabs)/settings/index.tsx b/expo/app/(tabs)/settings/index.tsx
+index 4d35df9..41133a6 100644
+--- a/expo/app/(tabs)/settings/index.tsx
++++ b/expo/app/(tabs)/settings/index.tsx
+@@ -37,6 +37,7 @@ import { useAutoLock } from '@/hooks/useAutoLock';
+ import { BackupSchedule, useBackupManager } from '@/hooks/useBackupManager';
+ import AppButton from '@/components/ui/AppButton';
+ import AppCard from '@/components/ui/AppCard';
++import ExportModal from '@/components/modals/ExportModal';
+ 
+ const BIOMETRIC_ENABLED_KEY = 'teacher_app_biometric_enabled';
+ const BIOMETRIC_PIN_KEY = 'teacher_app_biometric_pin';
+@@ -60,6 +61,7 @@ export default function SettingsScreen() {
+ 
+   // ── UI State ──
+   const [activeModal, setActiveModal] = useState<ActiveModal>(null);
++  const [isExportModalVisible, setIsExportModalVisible] = useState(false);
+   const [isBusy, setIsBusy] = useState(false);
+   const [busyText, setBusyText] = useState('');
+   const [restorePassword, setRestorePassword] = useState('');
+@@ -112,34 +114,6 @@ export default function SettingsScreen() {
+     setBiometricEnabled(value);
+   }, [getCurrentPin]);
+ 
+-  /** CSV-Export: serialisiert alle Schüler + Bewertungen asynchron */
+-  const handleExportCSV = useCallback(async () => {
+-    setActiveModal(null);
+-    showBusy('Exportiere Klassen…');
+-    try {
+-      // Build CSV in chunks, yielding to the event loop after each class
+-      let csv = 'Klasse,Schüler,Vorname,Nachname,Teilnahmen\n';
+-      for (const cls of data.classes) {
+-        await new Promise(r => setTimeout(r, 8)); // yield to UI thread
+-        setBusyText(`Exportiere ${cls.name}…`);
+-        for (const student of cls.students) {
+-          const participations = data.participations.filter(
+-            p => p.classId === cls.id && p.studentId === student.id
+-          ).length;
+-          csv += `"${cls.name}","${student.id}","${student.firstName}","${student.lastName}",${participations}\n`;
+-        }
+-      }
+-      const fileName = `lehrplan_export_${Date.now()}.csv`;
+-      const targetPath = `${FileSystem.documentDirectory}${fileName}`;
+-      await FileSystem.writeAsStringAsync(targetPath, csv);
+-      Alert.alert('Export gespeichert', `Datei: ${fileName} wurde im Dokument-Ordner gespeichert.`);
+-    } catch (e) {
+-      Alert.alert('Exportfehler', String(e));
+-    } finally {
+-      hideBusy();
+-    }
+-  }, [data]);
+-
+   /** Zweistufiger App-Reset */
+   const handleResetFinal = useCallback(async () => {
+     setActiveModal(null);
+@@ -286,8 +260,8 @@ export default function SettingsScreen() {
+               icon={<Lock size={18} color={Colors.primary} />}
+             />
+             <Row
+-              label="Als CSV exportieren"
+-              onPress={() => setActiveModal('export')}
++              label="Daten exportieren (PDF, Excel, JSON)"
++              onPress={() => setIsExportModalVisible(true)}
+               icon={<Download size={18} color={Colors.primary} />}
+             />
+             <View style={[styles.row, styles.rowNoArrow]}>
+@@ -360,37 +334,10 @@ export default function SettingsScreen() {
+         </View>
+       </Modal>
+ 
+-      {/* ── Export Confirm Modal ── */}
+-      <Modal transparent visible={activeModal === 'export'} animationType="slide">
+-        <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
+-          <View style={styles.modalContent}>
+-            <View style={styles.modalHeader}>
+-              <Download size={20} color={Colors.primary} />
+-              <Text style={styles.modalTitle}>Daten exportieren</Text>
+-            </View>
+-            <Text style={styles.modalHint}>
+-              Exportiert alle Klassen und Teilnahmen als CSV-Datei in den lokalen Dokument-Ordner des Geräts. Keine Cloud-Übertragung.
+-            </Text>
+-            <Text style={[styles.modalHint, { color: Colors.textSecondary, fontSize: 13 }]}>
+-              {data.classes.length} Klassen · {data.classes.reduce((a, c) => a + c.students.length, 0)} Schüler
+-            </Text>
+-            <View style={styles.modalActions}>
+-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+-                <Text style={styles.modalCancelText}>Abbrechen</Text>
+-              </TouchableOpacity>
+-              <TouchableOpacity style={styles.modalConfirmBtn} onPress={handleExportCSV}>
+-                <Text style={styles.modalConfirmText}>CSV exportieren</Text>
+-              </TouchableOpacity>
+-            </View>
+-          </View>
+-        </BlurView>
+-      </Modal>
+-
+       {/* ── Auto-lock modal ── */}
+       <Modal transparent visible={activeModal === 'auto_lock'} animationType="slide">
+         <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
++          <TouchableOpacity style={styles.modalDimmer} activeOpacity={1} onPress={() => setActiveModal(null)} />
+           <View style={styles.modalContent}>
+             <View style={styles.modalHeader}>
+               <Lock size={20} color={Colors.primary} />
+@@ -400,32 +347,34 @@ export default function SettingsScreen() {
+               Legt fest, wann die App nach Inaktivität oder nach Rückkehr aus dem Hintergrund automatisch gesperrt wird.
+             </Text>
+ 
+-            {autoLockOptions.map((option) => (
+-              <TouchableOpacity
+-                key={option.valueMs}
+-                style={[
+-                  styles.row,
+-                  styles.rowNoArrow,
+-                  option.label === currentOptionLabel && styles.autoLockRowActive,
+-                ]}
+-                onPress={async () => {
+-                  await setAutoLockTimeout(option.valueMs);
+-                  setActiveModal(null);
+-                }}
+-              >
+-                <Text
++            <View style={styles.modalOptionsContainer}>
++              {autoLockOptions.map((option) => (
++                <TouchableOpacity
++                  key={option.valueMs}
+                   style={[
+-                    styles.rowLabelText,
+-                    option.label === currentOptionLabel && styles.autoLockRowTextActive,
++                    styles.optionRow,
++                    option.label === currentOptionLabel && styles.optionRowActive,
+                   ]}
++                  onPress={async () => {
++                    await setAutoLockTimeout(option.valueMs);
++                    setActiveModal(null);
++                  }}
++                  activeOpacity={0.7}
+                 >
+-                  {option.label}
+-                </Text>
+-                {option.label === currentOptionLabel ? (
+-                  <CheckCircle size={16} color={Colors.primary} />
+-                ) : null}
+-              </TouchableOpacity>
+-            ))}
++                  <Text
++                    style={[
++                      styles.optionRowText,
++                      option.label === currentOptionLabel && styles.optionRowTextActive,
++                    ]}
++                  >
++                    {option.label}
++                  </Text>
++                  {option.label === currentOptionLabel && (
++                    <CheckCircle size={20} color={Colors.text} />
++                  )}
++                </TouchableOpacity>
++              ))}
++            </View>
+ 
+             <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+               <Text style={styles.modalCancelText}>Schließen</Text>
+@@ -437,7 +386,7 @@ export default function SettingsScreen() {
+       {/* ── Backup schedule modal ── */}
+       <Modal transparent visible={activeModal === 'backup_schedule'} animationType="slide">
+         <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
++          <TouchableOpacity style={styles.modalDimmer} activeOpacity={1} onPress={() => setActiveModal(null)} />
+           <View style={styles.modalContent}>
+             <View style={styles.modalHeader}>
+               <Lock size={20} color={Colors.primary} />
+@@ -446,21 +395,27 @@ export default function SettingsScreen() {
+             <Text style={styles.modalHint}>
+               Backups werden automatisch beim Starten/Wiederaufnehmen geprüft und bei Fälligkeit erstellt.
+             </Text>
+-            {(['daily', 'weekly', 'monthly'] as BackupSchedule[]).map((option) => (
+-              <TouchableOpacity
+-                key={option}
+-                style={[styles.row, styles.rowNoArrow, option === schedule && styles.autoLockRowActive]}
+-                onPress={async () => {
+-                  await setBackupSchedule(option);
+-                  setActiveModal(null);
+-                }}
+-              >
+-                <Text style={[styles.rowLabelText, option === schedule && styles.autoLockRowTextActive]}>
+-                  {scheduleLabel[option]}
+-                </Text>
+-                {option === schedule ? <CheckCircle size={16} color={Colors.primary} /> : null}
+-              </TouchableOpacity>
+-            ))}
++            <View style={styles.modalOptionsContainer}>
++              {(['daily', 'weekly', 'monthly'] as BackupSchedule[]).map((option) => (
++                <TouchableOpacity
++                  key={option}
++                  style={[
++                    styles.optionRow, 
++                    option === schedule && styles.optionRowActive
++                  ]}
++                  onPress={async () => {
++                    await setBackupSchedule(option);
++                    setActiveModal(null);
++                  }}
++                  activeOpacity={0.7}
++                >
++                  <Text style={[styles.optionRowText, option === schedule && styles.optionRowTextActive]}>
++                    {scheduleLabel[option]}
++                  </Text>
++                  {option === schedule && <CheckCircle size={20} color={Colors.text} />}
++                </TouchableOpacity>
++              ))}
++            </View>
+             <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+               <Text style={styles.modalCancelText}>Schließen</Text>
+             </TouchableOpacity>
+@@ -471,7 +426,7 @@ export default function SettingsScreen() {
+       {/* ── Backup restore modal ── */}
+       <Modal transparent visible={activeModal === 'backup_restore'} animationType="slide">
+         <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
++          <TouchableOpacity style={styles.modalDimmer} activeOpacity={1} onPress={() => setActiveModal(null)} />
+           <View style={styles.modalContent}>
+             <View style={styles.modalHeader}>
+               <Lock size={20} color={Colors.primary} />
+@@ -492,16 +447,21 @@ export default function SettingsScreen() {
+               placeholderTextColor={Colors.textLight}
+             />
+             <View style={styles.modalActions}>
+-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+-                <Text style={styles.modalCancelText}>Abbrechen</Text>
+-              </TouchableOpacity>
+-              <TouchableOpacity
+-                style={[styles.modalConfirmBtn, !latestBackup && styles.modalBtnDisabled]}
+-                disabled={!latestBackup}
+-                onPress={handleRestoreBackup}
+-              >
+-                <Text style={styles.modalConfirmText}>Jetzt wiederherstellen</Text>
+-              </TouchableOpacity>
++              <View style={{flex: 1}}>
++                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)} activeOpacity={0.7}>
++                  <Text style={styles.modalCancelText}>Abbrechen</Text>
++                </TouchableOpacity>
++              </View>
++              <View style={{flex: 1}}>
++                <TouchableOpacity
++                  style={[styles.modalConfirmBtn, !latestBackup && styles.modalBtnDisabled]}
++                  disabled={!latestBackup}
++                  onPress={handleRestoreBackup}
++                  activeOpacity={0.7}
++                >
++                  <Text style={styles.modalConfirmText}>Jetzt wiederherstellen</Text>
++                </TouchableOpacity>
++              </View>
+             </View>
+           </View>
+         </BlurView>
+@@ -510,7 +470,7 @@ export default function SettingsScreen() {
+       {/* ── Reset Step 1: Confirm ── */}
+       <Modal transparent visible={activeModal === 'reset_confirm'} animationType="slide">
+         <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
++          <TouchableOpacity style={styles.modalDimmer} activeOpacity={1} onPress={() => setActiveModal(null)} />
+           <View style={styles.modalContent}>
+             <View style={styles.modalHeader}>
+               <Trash2 size={20} color={Colors.negative} />
+@@ -520,15 +480,20 @@ export default function SettingsScreen() {
+               Dies löscht ALLE lokalen Daten unwiderruflich: Klassen, Schüler, Bewertungen, PIN und Schlüssel.
+             </Text>
+             <View style={styles.modalActions}>
+-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+-                <Text style={styles.modalCancelText}>Abbrechen</Text>
+-              </TouchableOpacity>
+-              <TouchableOpacity
+-                style={[styles.modalConfirmBtn, { backgroundColor: Colors.negative }]}
+-                onPress={() => setActiveModal('reset_final')}
+-              >
+-                <Text style={styles.modalConfirmText}>Weiter</Text>
+-              </TouchableOpacity>
++              <View style={{flex: 1}}>
++                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)} activeOpacity={0.7}>
++                  <Text style={styles.modalCancelText}>Abbrechen</Text>
++                </TouchableOpacity>
++              </View>
++              <View style={{flex: 1}}>
++                <TouchableOpacity
++                  style={[styles.modalConfirmBtn, { backgroundColor: Colors.negative }]}
++                  onPress={() => setActiveModal('reset_final')}
++                  activeOpacity={0.7}
++                >
++                  <Text style={[styles.modalConfirmText, { color: Colors.white }]}>Weiter</Text>
++                </TouchableOpacity>
++              </View>
+             </View>
+           </View>
+         </BlurView>
+@@ -537,7 +502,7 @@ export default function SettingsScreen() {
+       {/* ── Reset Step 2: Final confirm ── */}
+       <Modal transparent visible={activeModal === 'reset_final'} animationType="slide">
+         <BlurView intensity={20} tint="light" style={styles.modalOverlay}>
+-          <View style={styles.modalDimmer} />
++          <TouchableOpacity style={styles.modalDimmer} activeOpacity={1} onPress={() => setActiveModal(null)} />
+           <View style={styles.modalContent}>
+             <View style={styles.modalHeader}>
+               <Trash2 size={20} color={Colors.negative} />
+@@ -547,19 +512,29 @@ export default function SettingsScreen() {
+               ⚠️ Letzter Schritt. Es gibt kein Zurück. AsyncStorage, SecureStore und KeyCache werden vollständig geleert.
+             </Text>
+             <View style={styles.modalActions}>
+-              <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)}>
+-                <Text style={styles.modalCancelText}>Abbrechen</Text>
+-              </TouchableOpacity>
+-              <TouchableOpacity
+-                style={[styles.modalConfirmBtn, { backgroundColor: Colors.negative }]}
+-                onPress={handleResetFinal}
+-              >
+-                <Text style={styles.modalConfirmText}>Alles löschen</Text>
+-              </TouchableOpacity>
++              <View style={{flex: 1}}>
++                <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setActiveModal(null)} activeOpacity={0.7}>
++                  <Text style={styles.modalCancelText}>Abbrechen</Text>
++                </TouchableOpacity>
++              </View>
++              <View style={{flex: 1}}>
++                <TouchableOpacity
++                  style={[styles.modalConfirmBtn, { backgroundColor: Colors.negative }]}
++                  onPress={handleResetFinal}
++                  activeOpacity={0.7}
++                >
++                  <Text style={[styles.modalConfirmText, { color: Colors.white }]}>Alles löschen</Text>
++                </TouchableOpacity>
++              </View>
+             </View>
+           </View>
+         </BlurView>
+       </Modal>
++
++      <ExportModal 
++        visible={isExportModalVisible}
++        onClose={() => setIsExportModalVisible(false)}
++      />
+     </>
+   );
+ }
+@@ -685,33 +660,57 @@ const styles = StyleSheet.create({
+     color: Colors.text,
+     ...UI.font.body,
+   },
+-  modalActions: { flexDirection: 'row', gap: 12, marginTop: 4 },
++  modalActions: { flexDirection: 'row', gap: 12, marginTop: 16 },
+   modalCancelBtn: {
+-    flex: 1,
+-    paddingVertical: 14,
+-    borderRadius: 12,
++    width: '100%',
++    paddingVertical: 16,
++    borderRadius: 16,
+     backgroundColor: Colors.inputBg,
+     alignItems: 'center',
++    justifyContent: 'center',
++    minHeight: 52,
+   },
+   modalCancelText: { ...UI.font.body, fontWeight: '600' as const, color: Colors.textSecondary },
+   modalConfirmBtn: {
+-    flex: 1,
+-    paddingVertical: 14,
+-    borderRadius: UI.radius.md,
+-    backgroundColor: Colors.white,
++    width: '100%',
++    paddingVertical: 16,
++    borderRadius: 16,
++    backgroundColor: Colors.primary,
+     alignItems: 'center',
+-    ...UI.shadows.md,
++    justifyContent: 'center',
++    minHeight: 52,
++    ...UI.shadows.sm,
+   },
+-  modalConfirmText: { ...UI.font.body, fontWeight: '600' as const, color: Colors.text },
++  modalConfirmText: { ...UI.font.body, fontWeight: '600' as const, color: Colors.white },
+   modalBtnDisabled: {
+     opacity: 0.5,
+   },
+-  autoLockRowActive: {
+-    backgroundColor: Colors.primaryLight,
+-    borderRadius: 10,
++  modalOptionsContainer: {
++    marginTop: 8,
++    marginBottom: 8,
++    gap: 8,
++  },
++  optionRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'space-between',
++    paddingHorizontal: 16,
++    paddingVertical: 14,
++    borderRadius: UI.radius.lg,
++    backgroundColor: Colors.white,
++    borderWidth: 1,
++    borderColor: Colors.divider,
++  },
++  optionRowActive: {
++    backgroundColor: Colors.inputBg,
++    borderColor: 'transparent',
+   },
+-  autoLockRowTextActive: {
+-    color: Colors.primary,
++  optionRowText: {
++    ...UI.font.body,
++    color: Colors.textSecondary,
++  },
++  optionRowTextActive: {
++    color: Colors.text,
+     fontWeight: '600',
+   },
+ });
+diff --git a/expo/app/_layout.tsx b/expo/app/_layout.tsx
+index ea0fe3d..f7204b5 100644
+--- a/expo/app/_layout.tsx
++++ b/expo/app/_layout.tsx
+@@ -10,6 +10,7 @@ import FeatureTour from "@/components/FeatureTour";
+ import { AppProvider, useApp } from "@/context/AppContext";
+ import { TutorialProvider } from "@/context/TutorialContext";
+ import { useAutoLock } from "@/hooks/useAutoLock";
++import { usePurchases } from "@/hooks/usePurchases";
+ import {
+   logAppBoot,
+   logModuleStarting,
+@@ -30,26 +31,32 @@ logAppBoot();
+ function RootLayoutNav() {
+   const router = useRouter();
+   const segments = useSegments();
+-  const { data, isAuthenticated, isLoading, storedPinHash } = useApp();
++  const { data, isAuthenticated, isLoading, storedPinHash, isPreviewMode } = useApp();
+   const notificationListener = useRef<Notifications.EventSubscription | null>(null);
+   const navigatorLogged = useRef(false);
+   const { registerInteraction } = useAutoLock();
++  const { hasActiveSubscription } = usePurchases();
+ 
+   const onboardingDone = data.onboardingComplete || !!storedPinHash;
+ 
+   useEffect(() => {
+-    if (isLoading) return;
++    if (isLoading || hasActiveSubscription === null) return;
+     const isOnboarding = (segments as string[])[0] === 'onboarding';
+     const isLock = segments[0] === 'lock';
+-    const isProtected = !isOnboarding && !isLock;
++    const isPaywall = segments[0] === 'paywall';
++    const isProtected = !isOnboarding && !isLock && !isPaywall;
++    
+     if (!onboardingDone && isProtected) {
+       console.log('[AuthGuard] Redirecting to onboarding');
+       router.replace('/onboarding' as any);
+     } else if (onboardingDone && !isAuthenticated && isProtected) {
+       console.log('[AuthGuard] Redirecting to lock');
+       router.replace('/lock' as any);
++    } else if (onboardingDone && isAuthenticated && hasActiveSubscription === false && !isPreviewMode && isProtected) {
++      console.log('[AuthGuard] Redirecting to paywall');
++      router.replace('/paywall' as any);
+     }
+-  }, [isLoading, onboardingDone, isAuthenticated, segments, router]);
++  }, [isLoading, onboardingDone, isAuthenticated, hasActiveSubscription, isPreviewMode, segments, router]);
+ 
+   useEffect(() => {
+     if (!navigatorLogged.current) {
+@@ -116,6 +123,7 @@ function RootLayoutNav() {
+         <Stack.Screen name="(tabs)" />
+         <Stack.Screen name="onboarding" options={{ gestureEnabled: false }} />
+         <Stack.Screen name="lock" options={{ presentation: "transparentModal", animation: "fade", gestureEnabled: false }} />
++        <Stack.Screen name="paywall" options={{ presentation: "modal", gestureEnabled: false }} />
+         <Stack.Screen name="lesson-active" options={{ presentation: "modal", gestureEnabled: false }} />
+       </Stack>
+     </View>
+diff --git a/expo/app/paywall.tsx b/expo/app/paywall.tsx
+new file mode 100644
+index 0000000..77aa4a9
+--- /dev/null
++++ b/expo/app/paywall.tsx
+@@ -0,0 +1,422 @@
++import React, { useState } from 'react';
++import {
++  View,
++  Text,
++  StyleSheet,
++  SafeAreaView,
++  ScrollView,
++  TouchableOpacity,
++  ActivityIndicator,
++  Modal,
++  Alert,
++  KeyboardAvoidingView,
++  Platform,
++} from 'react-native';
++import { useRouter } from 'expo-router';
++import { Check, Lock, ShieldCheck, KeyRound, X, Download, Eye } from 'lucide-react-native';
++import { usePurchases } from '@/hooks/usePurchases';
++import { useApp } from '@/context/AppContext';
++import * as FileSystem from 'expo-file-system/legacy';
++import * as Sharing from 'expo-sharing';
++import { UI } from '@/constants/ui';
++import Colors from '@/constants/colors';
++import AppButton from '@/components/ui/AppButton';
++import AppInput from '@/components/ui/AppInput';
++import ExportModal from '@/components/modals/ExportModal';
++import { BlurView } from 'expo-blur';
++
++export default function PaywallScreen() {
++  const router = useRouter();
++  const {
++    subscriptions,
++    purchaseSubscription,
++    restorePurchases,
++    redeemPromoCode,
++    isProcessing: isPurchasing,
++    hasActiveSubscription,
++  } = usePurchases();
++
++  const { data, setIsPreviewMode } = useApp();
++  const [isPromoModalVisible, setIsPromoModalVisible] = useState(false);
++  const [promoCode, setPromoCode] = useState('');
++  const [promoAttempts, setPromoAttempts] = useState(0);
++  const [isExportModalVisible, setIsExportModalVisible] = useState(false);
++  
++  const isProcessing = isPurchasing;
++
++  // If the user successfully subscribed, navigate back to tabs
++  React.useEffect(() => {
++    if (hasActiveSubscription) {
++      router.replace('/(tabs)' as any);
++    }
++  }, [hasActiveSubscription, router]);
++
++  const handlePurchase = async () => {
++    // Pick the first available subscription (e.g. monthly)
++    const sub = subscriptions[0];
++    if (sub) {
++      await purchaseSubscription(sub.productId);
++    } else {
++      // Fallback if products haven't loaded yet
++      await purchaseSubscription('com.rork.teacher.monthly');
++    }
++  };
++
++  const handleRedeemCode = async () => {
++    if (!promoCode.trim()) return;
++
++    if (promoAttempts >= 5) {
++      Alert.alert('Zu viele Versuche', 'Bitte warte einen Moment, bevor du es erneut versuchst.');
++      return;
++    }
++
++    const success = await redeemPromoCode(promoCode);
++    if (success) {
++      setPromoCode('');
++      setIsPromoModalVisible(false);
++      // hasActiveSubscription becomes true, triggering the useEffect redirect
++      Alert.alert('Aktiviert', 'Dein Code wurde erfolgreich eingelöst!');
++    } else {
++      setPromoAttempts(prev => prev + 1);
++      Alert.alert('Ungültiger Code', 'Dieser Code ist leider nicht gültig.');
++    }
++  };
++
++  return (
++    <SafeAreaView style={styles.container}>
++      <ScrollView contentContainerStyle={styles.scrollContent}>
++        
++        {/* Header Icon */}
++        <View style={styles.header}>
++          <View style={styles.iconCircle}>
++            <Lock size={32} color={Colors.primary} />
++          </View>
++          <Text style={styles.title}>Rork Lehrer App</Text>
++          <Text style={styles.subtitle}>Schalte alle Premium-Funktionen frei</Text>
++        </View>
++
++        {/* Benefits List */}
++        <View style={styles.benefitsContainer}>
++          {[
++            'Unbegrenzte Klassen & Schüler',
++            'Sichere Offline-Datenspeicherung',
++            'Schnelle Noten & Hausaufgaben',
++            '100% DSGVO-konform (alles lokal)',
++          ].map((benefit, idx) => (
++            <View key={idx} style={styles.benefitRow}>
++              <View style={styles.checkCircle}>
++                <Check size={16} color={Colors.white} strokeWidth={3} />
++              </View>
++              <Text style={styles.benefitText}>{benefit}</Text>
++            </View>
++          ))}
++        </View>
++
++        {/* Pricing Card */}
++        <View style={styles.pricingCard}>
++          <Text style={styles.pricingTitle}>1 Monat kostenlos testen</Text>
++          <Text style={styles.price}>
++            {subscriptions.length > 0 && subscriptions[0].localizedPrice 
++              ? subscriptions[0].localizedPrice 
++              : '2,99 €'}
++            <Text style={styles.pricePeriod}> / Monat</Text>
++          </Text>
++          <Text style={styles.pricingDesc}>
++            Danach zahlungspflichtig. Jederzeit im Store kündbar.
++          </Text>
++        </View>
++
++        {/* Actions */}
++        <View style={styles.actions}>
++          <AppButton
++            label={isProcessing ? "Verarbeite..." : "Kostenlos testen"}
++            onPress={handlePurchase}
++            disabled={isProcessing}
++            style={styles.mainButton}
++            leftIcon={isProcessing ? <ActivityIndicator color={Colors.text} /> : undefined}
++          />
++
++          <View style={styles.secondaryActions}>
++            <TouchableOpacity 
++              style={styles.secondaryButton} 
++              onPress={restorePurchases}
++              disabled={isProcessing}
++            >
++              <Text style={styles.secondaryButtonText}>Käufe wiederherstellen</Text>
++            </TouchableOpacity>
++
++            <TouchableOpacity 
++              style={styles.secondaryButton} 
++              onPress={() => setIsExportModalVisible(true)}
++              disabled={isProcessing}
++            >
++              <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
++                <Download size={16} color={Colors.textSecondary} />
++                <Text style={styles.secondaryButtonText}>Daten exportieren</Text>
++              </View>
++            </TouchableOpacity>
++
++            <TouchableOpacity 
++              style={styles.secondaryButton} 
++              onPress={() => {
++                setIsPreviewMode(true);
++                router.replace('/(tabs)' as any);
++              }}
++              disabled={isProcessing}
++            >
++              <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
++                <Eye size={16} color={Colors.textSecondary} />
++                <Text style={styles.secondaryButtonText}>App ansehen</Text>
++              </View>
++            </TouchableOpacity>
++          </View>
++        </View>
++
++        {/* Legal & Promo */}
++        <View style={styles.footer}>
++          <View style={styles.legalLinks}>
++            <TouchableOpacity><Text style={styles.legalText}>Nutzungsbedingungen (EULA)</Text></TouchableOpacity>
++            <Text style={styles.legalDot}>•</Text>
++            <TouchableOpacity><Text style={styles.legalText}>Datenschutz</Text></TouchableOpacity>
++          </View>
++          
++          <TouchableOpacity 
++            style={styles.promoLink}
++            onPress={() => setIsPromoModalVisible(true)}
++          >
++            <KeyRound size={14} color={Colors.textLight} style={{ marginRight: 6 }} />
++            <Text style={styles.promoText}>Aktivierungscode einlösen</Text>
++          </TouchableOpacity>
++        </View>
++      </ScrollView>
++
++      {/* Promo Code Modal */}
++      <Modal
++        visible={isPromoModalVisible}
++        transparent
++        animationType="fade"
++      >
++        <KeyboardAvoidingView 
++          style={styles.modalOverlay} 
++          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
++        >
++          <BlurView intensity={20} style={StyleSheet.absoluteFill} />
++          
++          <View style={styles.modalContent}>
++            <TouchableOpacity 
++              style={styles.modalClose} 
++              onPress={() => setIsPromoModalVisible(false)}
++            >
++              <X size={24} color={Colors.textSecondary} />
++            </TouchableOpacity>
++
++            <View style={styles.modalHeader}>
++              <ShieldCheck size={32} color={Colors.primary} />
++              <Text style={styles.modalTitle}>Code einlösen</Text>
++              <Text style={styles.modalSubtitle}>
++                Gib deinen Aktivierungs- oder Promo-Code ein, um die App freizuschalten.
++              </Text>
++            </View>
++
++            <AppInput
++              value={promoCode}
++              onChangeText={setPromoCode}
++              placeholder="Z.B. RORK-30D-A1B2C3"
++              autoCapitalize="characters"
++              autoCorrect={false}
++              style={{ marginBottom: UI.spacing.lg }}
++            />
++
++            <AppButton
++              label={isProcessing ? "Prüfe..." : "Aktivieren"}
++              onPress={handleRedeemCode}
++              disabled={isProcessing || promoCode.length < 3}
++              leftIcon={isProcessing ? <ActivityIndicator color={Colors.text} /> : undefined}
++            />
++          </View>
++        </KeyboardAvoidingView>
++      </Modal>
++
++      <ExportModal 
++        visible={isExportModalVisible}
++        onClose={() => setIsExportModalVisible(false)}
++      />
++    </SafeAreaView>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    backgroundColor: Colors.background,
++  },
++  scrollContent: {
++    flexGrow: 1,
++    padding: UI.spacing.lg,
++    paddingTop: UI.spacing.xl * 2,
++    justifyContent: 'space-between',
++  },
++  header: {
++    alignItems: 'center',
++    marginBottom: UI.spacing.xl,
++  },
++  iconCircle: {
++    width: 64,
++    height: 64,
++    borderRadius: 32,
++    backgroundColor: Colors.white,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginBottom: UI.spacing.md,
++    ...UI.shadows.md,
++  },
++  title: {
++    ...UI.font.title,
++    color: Colors.text,
++    textAlign: 'center',
++    marginBottom: 4,
++  },
++  subtitle: {
++    ...UI.font.body,
++    color: Colors.textSecondary,
++    textAlign: 'center',
++  },
++  benefitsContainer: {
++    backgroundColor: Colors.white,
++    borderRadius: UI.radius.xl,
++    padding: UI.spacing.lg,
++    ...UI.shadows.sm,
++    marginBottom: UI.spacing.xl,
++  },
++  benefitRow: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    marginBottom: 16,
++  },
++  checkCircle: {
++    width: 24,
++    height: 24,
++    borderRadius: 12,
++    backgroundColor: Colors.positive,
++    alignItems: 'center',
++    justifyContent: 'center',
++    marginRight: 12,
++  },
++  benefitText: {
++    ...UI.font.bodySemibold,
++    color: Colors.text,
++    flex: 1,
++  },
++  pricingCard: {
++    alignItems: 'center',
++    marginBottom: UI.spacing.xl,
++  },
++  pricingTitle: {
++    ...UI.font.smallSemibold,
++    color: Colors.textSecondary,
++    textTransform: 'uppercase',
++    letterSpacing: 1,
++    marginBottom: 8,
++  },
++  price: {
++    fontSize: 42,
++    fontWeight: '800',
++    color: Colors.text,
++    marginBottom: 8,
++  },
++  pricePeriod: {
++    fontSize: 20,
++    fontWeight: '600',
++    color: Colors.textSecondary,
++  },
++  pricingDesc: {
++    ...UI.font.small,
++    color: Colors.textSecondary,
++  },
++  actions: {
++    gap: UI.spacing.md,
++    marginBottom: UI.spacing.xl,
++  },
++  mainButton: {
++    width: '100%',
++  },
++  secondaryActions: {
++    flexDirection: 'row',
++    justifyContent: 'space-around',
++    alignItems: 'center',
++    paddingHorizontal: UI.spacing.sm,
++  },
++  secondaryButton: {
++    paddingVertical: 14,
++    alignItems: 'center',
++  },
++  secondaryButtonText: {
++    ...UI.font.bodySemibold,
++    color: Colors.textSecondary,
++  },
++  footer: {
++    alignItems: 'center',
++    gap: 16,
++  },
++  legalLinks: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    justifyContent: 'center',
++    gap: 12,
++  },
++  legalText: {
++    ...UI.font.caption,
++    color: Colors.textLight,
++    textDecorationLine: 'underline',
++  },
++  legalDot: {
++    color: Colors.textLight,
++  },
++  promoLink: {
++    flexDirection: 'row',
++    alignItems: 'center',
++    padding: 8,
++  },
++  promoText: {
++    ...UI.font.caption,
++    fontWeight: '600',
++    color: Colors.textLight,
++  },
++  
++  // Modal Styles
++  modalOverlay: {
++    flex: 1,
++    backgroundColor: 'rgba(0,0,0,0.4)',
++    justifyContent: 'center',
++    padding: UI.spacing.lg,
++  },
++  modalContent: {
++    backgroundColor: Colors.background,
++    borderRadius: UI.radius.xl,
++    padding: UI.spacing.xl,
++    ...UI.shadows.lg,
++  },
++  modalClose: {
++    position: 'absolute',
++    top: 16,
++    right: 16,
++    zIndex: 10,
++    padding: 8,
++  },
++  modalHeader: {
++    alignItems: 'center',
++    marginBottom: UI.spacing.xl,
++    marginTop: 8,
++  },
++  modalTitle: {
++    ...UI.font.title,
++    color: Colors.text,
++    marginTop: 12,
++    marginBottom: 8,
++  },
++  modalSubtitle: {
++    ...UI.font.body,
++    color: Colors.textSecondary,
++    textAlign: 'center',
++  },
++});
+diff --git a/expo/bun.lock b/expo/bun.lock
+index a8765ca..83c69a3 100644
+--- a/expo/bun.lock
++++ b/expo/bun.lock
+@@ -24,6 +24,7 @@
+         "expo-haptics": "~15.0.8",
+         "expo-image": "~3.0.11",
+         "expo-image-picker": "~17.0.9",
++        "expo-keep-awake": "~15.0.8",
+         "expo-linear-gradient": "~15.0.8",
+         "expo-linking": "~8.0.10",
+         "expo-local-authentication": "~17.0.8",
+@@ -32,6 +33,7 @@
+         "expo-print": "~15.0.8",
+         "expo-router": "~6.0.17",
+         "expo-secure-store": "~15.0.8",
++        "expo-sharing": "~14.0.8",
+         "expo-splash-screen": "~31.0.12",
+         "expo-status-bar": "~3.0.9",
+         "expo-symbols": "~1.0.8",
+@@ -42,11 +44,13 @@
+         "react-dom": "19.1.0",
+         "react-native": "0.81.5",
+         "react-native-gesture-handler": "~2.28.0",
++        "react-native-iap": "^15.2.0",
+         "react-native-safe-area-context": "~5.6.0",
+         "react-native-screens": "~4.16.0",
+         "react-native-svg": "15.12.1",
+         "react-native-web": "^0.21.0",
+         "react-native-worklets": "0.5.1",
++        "xlsx": "^0.18.5",
+         "zod": "^4.3.6",
+         "zustand": "^5.0.2",
+       },
+@@ -665,6 +669,8 @@
+ 
+     "acorn-jsx": ["acorn-jsx@5.3.2", "", { "peerDependencies": { "acorn": "^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ=="],
+ 
++    "adler-32": ["adler-32@1.3.1", "", {}, "sha512-ynZ4w/nUUv5rrsR8UUGoe1VC9hZj6V5hU9Qw1HlMDJGEJw5S7TfTErWTjMys6M7vr0YWcPqs3qAr4ss0nDfP+A=="],
++
+     "agent-base": ["agent-base@7.1.3", "", {}, "sha512-jRR5wdylq8CkOe6hei19GGZnxM6rBGwFl3Bg0YItGDimvjGtAvdZk4Pu6Cl4u4Igsws4a1fd1Vq3ezrhn4KmFw=="],
+ 
+     "ai": ["ai@5.0.114", "", { "dependencies": { "@ai-sdk/gateway": "2.0.21", "@ai-sdk/provider": "2.0.0", "@ai-sdk/provider-utils": "3.0.19", "@opentelemetry/api": "1.9.0" }, "peerDependencies": { "zod": "^3.25.76 || ^4.1.8" } }, "sha512-q/lxcJA6avYn/TXTaE41VX6p9lN245mDU9bIGuPpfk6WxDMvmMoUKUIS0/aXAPYN3UmkUn/r9rvq/8C98RoCWw=="],
+@@ -789,6 +795,8 @@
+ 
+     "caniuse-lite": ["caniuse-lite@1.0.30001698", "", {}, "sha512-xJ3km2oiG/MbNU8G6zIq6XRZ6HtAOVXsbOrP/blGazi52kc5Yy7b6sDA5O+FbROzRrV7BSTllLHuNvmawYUJjw=="],
+ 
++    "cfb": ["cfb@1.2.2", "", { "dependencies": { "adler-32": "~1.3.0", "crc-32": "~1.2.0" } }, "sha512-KfdUZsSOw19/ObEWasvBP/Ac4reZvAGauZhs6S/gqNhXhI7cKwvlH7ulj+dOEYnca4bm4SGo8C1bTAQvnTjgQA=="],
++
+     "chalk": ["chalk@4.1.2", "", { "dependencies": { "ansi-styles": "^4.1.0", "supports-color": "^7.1.0" } }, "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA=="],
+ 
+     "chownr": ["chownr@3.0.0", "", {}, "sha512-+IxzY9BZOQd/XuYPRmrvEVjF/nqj5kgT4kEq7VofrDoM1MxoRjEWkrCC3EtLi59TVawxTAn+orJwFQcrqEN1+g=="],
+@@ -811,6 +819,8 @@
+ 
+     "clone-response": ["clone-response@1.0.3", "", { "dependencies": { "mimic-response": "^1.0.0" } }, "sha512-ROoL94jJH2dUVML2Y/5PEDNaSHgeOdSDicUyS7izcF63G6sTc/FTjLub4b8Il9S8S0beOfYt0TaA5qvFK+w0wA=="],
+ 
++    "codepage": ["codepage@1.15.0", "", {}, "sha512-3g6NUTPd/YtuuGrhMnOMRjFc+LJw/bnMp3+0r/Wcz3IXUuCosKRJvMphm5+Q+bvTVGcJJuRvVLuYba+WojaFaA=="],
++
+     "color": ["color@4.2.3", "", { "dependencies": { "color-convert": "^2.0.1", "color-string": "^1.9.0" } }, "sha512-1rXeuUUiGGrykh+CeBdu5Ie7OJwinCgQY0bc7GCRxy5xVHy+moaqkpL/jqQq0MtQOeYcrqEz4abc5f0KtU7W4A=="],
+ 
+     "color-convert": ["color-convert@2.0.1", "", { "dependencies": { "color-name": "~1.1.4" } }, "sha512-RRECPsj7iu/xb5oKYcsFHSppFNnsj/52OVTRKb4zP5onXwVF3zVmmToNcOfGC+CRDpfK/U584fMg38ZHCaElKQ=="],
+@@ -833,6 +843,8 @@
+ 
+     "core-js-compat": ["core-js-compat@3.40.0", "", { "dependencies": { "browserslist": "^4.24.3" } }, "sha512-0XEDpr5y5mijvw8Lbc6E5AkjrHfp7eEoPlu36SWeAbcL8fn1G1ANe8DBlo2XoNN89oVpxWwOjYIPVzR4ZvsKCQ=="],
+ 
++    "crc-32": ["crc-32@1.2.2", "", { "bin": { "crc32": "bin/crc32.njs" } }, "sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ=="],
++
+     "cross-fetch": ["cross-fetch@3.2.0", "", { "dependencies": { "node-fetch": "^2.7.0" } }, "sha512-Q+xVJLoGOeIMXZmbUK4HYk+69cQH6LudR0Vu/pRm2YlU/hDV9CiS0gKUMaWY5f2NeUH9C1nV3bsTlCo0FsTV1Q=="],
+ 
+     "cross-spawn": ["cross-spawn@7.0.6", "", { "dependencies": { "path-key": "^3.1.0", "shebang-command": "^2.0.0", "which": "^2.0.1" } }, "sha512-uV2QOWP2nWzsy2aMp8aRibhi9dlzF5Hgh5SHaB9OiTGEyDTiJJyx0uy51QXdyWbtAHNua4XJzUKca3OzKUd3vA=="],
+@@ -1037,6 +1049,8 @@
+ 
+     "expo-server": ["expo-server@1.0.5", "", {}, "sha512-IGR++flYH70rhLyeXF0Phle56/k4cee87WeQ4mamS+MkVAVP+dDlOHf2nN06Z9Y2KhU0Gp1k+y61KkghF7HdhA=="],
+ 
++    "expo-sharing": ["expo-sharing@14.0.8", "", { "peerDependencies": { "expo": "*" } }, "sha512-A1pPr2iBrxypFDCWVAESk532HK+db7MFXbvO2sCV9ienaFXAk7lIBm6bkqgE6vzRd9O3RGdEGzYx80cYlc089Q=="],
++
+     "expo-splash-screen": ["expo-splash-screen@31.0.12", "", { "dependencies": { "@expo/prebuild-config": "^54.0.7" }, "peerDependencies": { "expo": "*" } }, "sha512-o466xFYh7Fld7CuBrzx5I12LONo7a4xzOSbxS+buOEObL/Wp4Xu4QhXg80ZY7puCGbJbtm7Ltjgg5olnWOU/Rg=="],
+ 
+     "expo-status-bar": ["expo-status-bar@3.0.9", "", { "dependencies": { "react-native-is-edge-to-edge": "^1.2.1" }, "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-xyYyVg6V1/SSOZWh4Ni3U129XHCnFHBTcUo0dhWtFDrZbNp/duw5AGsQfb2sVeU0gxWHXSY1+5F0jnKYC7WuOw=="],
+@@ -1087,6 +1101,8 @@
+ 
+     "for-each": ["for-each@0.3.5", "", { "dependencies": { "is-callable": "^1.2.7" } }, "sha512-dKx12eRCVIzqCxFGplyFKJMPvLEWgmNtUrpTiJIR5u97zEhRG8ySrtboPHZXx7daLxQVrl643cTzbab2tkQjxg=="],
+ 
++    "frac": ["frac@1.1.2", "", {}, "sha512-w/XBfkibaTl3YDqASwfDUqkna4Z2p9cFSr1aHDt0WoMTECnRfBOv2WArlZILlqgWlmdIlALXGpM2AOhEk5W3IA=="],
++
+     "freeport-async": ["freeport-async@2.0.0", "", {}, "sha512-K7od3Uw45AJg00XUmy15+Hae2hOcgKcmN3/EF6Y7i01O0gaqiRx8sUSpsb9+BRNL8RPBrhzPsVfy8q9ADlJuWQ=="],
+ 
+     "fresh": ["fresh@0.5.2", "", {}, "sha512-zJ2mQYM18rEFOudeV4GShTGIQ7RbzA7ozbU9I/XBpm7kqgMywgmylMwXHxZJmkVoYkna9d2pVXVXPdYTP9ej8Q=="],
+@@ -1593,10 +1609,14 @@
+ 
+     "react-native-gesture-handler": ["react-native-gesture-handler@2.28.0", "", { "dependencies": { "@egjs/hammerjs": "^2.0.17", "hoist-non-react-statics": "^3.3.0", "invariant": "^2.2.4" }, "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-0msfJ1vRxXKVgTgvL+1ZOoYw3/0z1R+Ked0+udoJhyplC2jbVKIJ8Z1bzWdpQRCV3QcQ87Op0zJVE5DhKK2A0A=="],
+ 
++    "react-native-iap": ["react-native-iap@15.2.0", "", { "peerDependencies": { "react": "*", "react-native": "*", "react-native-nitro-modules": "^0.35.0" } }, "sha512-p3DM+Dg/lOucKNGUAW6Ssh1NPz4e7HsYYI7wblo4aIHxqjw0giPagypRcdEXXpI9b9sNf2quw1AbYVdQQogt2A=="],
++
+     "react-native-is-edge-to-edge": ["react-native-is-edge-to-edge@1.2.1", "", { "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-FLbPWl/MyYQWz+KwqOZsSyj2JmLKglHatd3xLZWskXOpRaio4LfEDEz8E/A6uD8QoTHW6Aobw1jbEwK7KMgR7Q=="],
+ 
+     "react-native-maps": ["react-native-maps@1.26.19", "", { "dependencies": { "@types/geojson": "^7946.0.13" }, "peerDependencies": { "react": ">= 18.3.1", "react-native": ">= 0.76.0", "react-native-web": ">= 0.11" }, "optionalPeers": ["react-native-web"] }, "sha512-Eg6f6roq5sAOjClagKz90eRpYrITZg6QPelLjtTLslZU4YZ/86c/wmVs9HR94eJCKg77zUGB6hjd2L5obAakxA=="],
+ 
++    "react-native-nitro-modules": ["react-native-nitro-modules@0.35.5", "", { "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-aa03UzC5dLg5qFfyBkVK+JGSwHTjmK7jUZzyRz11r1Yk9C/nJTFe59EeHPxxNNTagkiwQTM6p3sySgD/TDRC7Q=="],
++
+     "react-native-safe-area-context": ["react-native-safe-area-context@5.6.1", "", { "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-/wJE58HLEAkATzhhX1xSr+fostLsK8Q97EfpfMDKo8jlOc1QKESSX/FQrhk7HhQH/2uSaox4Y86sNaI02kteiA=="],
+ 
+     "react-native-screens": ["react-native-screens@4.16.0", "", { "dependencies": { "react-freeze": "^1.0.0", "react-native-is-edge-to-edge": "^1.2.1", "warn-once": "^0.1.0" }, "peerDependencies": { "react": "*", "react-native": "*" } }, "sha512-yIAyh7F/9uWkOzCi1/2FqvNvK6Wb9Y1+Kzn16SuGfN9YFJDTbwlzGRvePCNTOX0recpLQF3kc2FmvMUhyTCH1Q=="],
+@@ -1735,6 +1755,8 @@
+ 
+     "sprintf-js": ["sprintf-js@1.0.3", "", {}, "sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g=="],
+ 
++    "ssf": ["ssf@0.11.2", "", { "dependencies": { "frac": "~1.1.2" } }, "sha512-+idbmIXoYET47hH+d7dfm2epdOMUDjqcB4648sTZ+t2JwoyBFL/insLfB/racrDmsKB3diwsDA696pZMieAC5g=="],
++
+     "stable-hash": ["stable-hash@0.0.5", "", {}, "sha512-+L3ccpzibovGXFK+Ap/f8LOS0ahMrHTf3xu7mMLSpEGU0EO9ucaysSylKo9eRDFNhWve/y275iPmIZ4z39a9iA=="],
+ 
+     "stack-utils": ["stack-utils@2.0.6", "", { "dependencies": { "escape-string-regexp": "^2.0.0" } }, "sha512-XlkWvfIm6RmsWtNJx+uqtKLS8eqFbxUg0ZzLXqY0caEy9l7hruX8IpiDnjsLavoBgqCCR71TqWO8MaXYheJ3RQ=="],
+@@ -1909,8 +1931,12 @@
+ 
+     "which-typed-array": ["which-typed-array@1.1.19", "", { "dependencies": { "available-typed-arrays": "^1.0.7", "call-bind": "^1.0.8", "call-bound": "^1.0.4", "for-each": "^0.3.5", "get-proto": "^1.0.1", "gopd": "^1.2.0", "has-tostringtag": "^1.0.2" } }, "sha512-rEvr90Bck4WZt9HHFC4DJMsjvu7x+r6bImz0/BrbWb7A2djJ8hnZMrWnHo9F8ssv0OMErasDhftrfROTyqSDrw=="],
+ 
++    "wmf": ["wmf@1.0.2", "", {}, "sha512-/p9K7bEh0Dj6WbXg4JG0xvLQmIadrner1bi45VMJTfnbVHsc7yIajZyoSoK60/dtVBs12Fm6WkUI5/3WAVsNMw=="],
++
+     "wonka": ["wonka@6.3.4", "", {}, "sha512-CjpbqNtBGNAeyNS/9W6q3kSkKE52+FjIj7AkFlLr11s/VWGUu6a2CdYSdGxocIhIVjaW/zchesBQUKPVU69Cqg=="],
+ 
++    "word": ["word@0.3.0", "", {}, "sha512-OELeY0Q61OXpdUfTp+oweA/vtLVg5VDOXh+3he3PNzLGG/y0oylSOC1xRVj0+l4vQ3tj/bB1HVHv1ocXkQceFA=="],
++
+     "word-wrap": ["word-wrap@1.2.5", "", {}, "sha512-BN22B5eaMMI9UMtjrGd5g5eCYPpCPDUy0FJXbYsaT5zYxjFOckS53SQDE3pWkVoWpHXVb3BrYcEN4Twa55B5cA=="],
+ 
+     "wrap-ansi": ["wrap-ansi@7.0.0", "", { "dependencies": { "ansi-styles": "^4.0.0", "string-width": "^4.1.0", "strip-ansi": "^6.0.0" } }, "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q=="],
+@@ -1923,6 +1949,8 @@
+ 
+     "xcode": ["xcode@3.0.1", "", { "dependencies": { "simple-plist": "^1.1.0", "uuid": "^7.0.3" } }, "sha512-kCz5k7J7XbJtjABOvkc5lJmkiDh8VhjVCGNiqdKCscmVpdVUpEAyXv1xmCLkQJ5dsHqx3IPO4XW+NTDhU/fatA=="],
+ 
++    "xlsx": ["xlsx@0.18.5", "", { "dependencies": { "adler-32": "~1.3.0", "cfb": "~1.2.1", "codepage": "~1.15.0", "crc-32": "~1.2.1", "ssf": "~0.11.2", "wmf": "~1.0.1", "word": "~0.3.0" }, "bin": { "xlsx": "bin/xlsx.njs" } }, "sha512-dmg3LCjBPHZnQp5/F/+nnTa+miPJxUXB6vtk42YjBBKayDNagxGEeIdWApkYPOf3Z3pm3k62Knjzp7lMeTEtFQ=="],
++
+     "xml2js": ["xml2js@0.6.0", "", { "dependencies": { "sax": ">=0.6.0", "xmlbuilder": "~11.0.0" } }, "sha512-eLTh0kA8uHceqesPqSE+VvO1CDDJWMwlQfB6LuN6T8w6MaDJ8Txm8P7s5cHD0miF0V+GGTZrDQfxPZQVsur33w=="],
+ 
+     "xmlbuilder": ["xmlbuilder@15.1.1", "", {}, "sha512-yMqGBqtXyeN1e3TGYvgNgDVZ3j84W4cwkOXQswghol6APgZWaff9lnbvN7MHYJOiXsvGPXtjTYJEiC9J2wv9Eg=="],
+diff --git a/expo/components/modals/ExportModal.tsx b/expo/components/modals/ExportModal.tsx
+new file mode 100644
+index 0000000..16884b7
+--- /dev/null
++++ b/expo/components/modals/ExportModal.tsx
+@@ -0,0 +1,387 @@
++import React, { useState } from 'react';
++import {
++  View,
++  Text,
++  StyleSheet,
++  Modal,
++  TouchableOpacity,
++  ScrollView,
++  ActivityIndicator,
++  Alert,
++} from 'react-native';
++import { BlurView } from 'expo-blur';
++import { X, FileText, FileSpreadsheet, FileJson, Check } from 'lucide-react-native';
++import * as FileSystem from 'expo-file-system';
++import * as Sharing from 'expo-sharing';
++import * as Print from 'expo-print';
++import XLSX from 'xlsx';
++import { UI } from '@/constants/ui';
++import Colors from '@/constants/colors';
++import AppButton from '@/components/ui/AppButton';
++import { useApp } from '@/context/AppContext';
++
++interface ExportModalProps {
++  visible: boolean;
++  onClose: () => void;
++}
++
++type ExportFormat = 'pdf' | 'excel' | 'csv';
++
++export default function ExportModal({ visible, onClose }: ExportModalProps) {
++  const { data } = useApp();
++  const [format, setFormat] = useState<ExportFormat>('pdf');
++  const [selectedClasses, setSelectedClasses] = useState<string[]>([]);
++  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
++  const [isExporting, setIsExporting] = useState(false);
++
++  const toggleClass = (id: string) => {
++    setSelectedClasses(prev =>
++      prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
++    );
++  };
++
++  const toggleSubject = (sub: string) => {
++    setSelectedSubjects(prev =>
++      prev.includes(sub) ? prev.filter(s => s !== sub) : [...prev, sub]
++    );
++  };
++
++  const handleExport = async () => {
++    try {
++      setIsExporting(true);
++
++      // Filter data
++      const filteredClasses = data.classes.filter(c => 
++        selectedClasses.length === 0 || selectedClasses.includes(c.id)
++      );
++      const classIds = filteredClasses.map(c => c.id);
++
++      const filteredParticipations = data.participations.filter(p => 
++        classIds.includes(p.classId) && 
++        (selectedSubjects.length === 0 || selectedSubjects.includes(p.subject))
++      );
++
++      const filteredHomework = data.homeworkEntries.filter(h => 
++        classIds.includes(h.classId) && 
++        (selectedSubjects.length === 0 || selectedSubjects.includes(h.subject))
++      );
++
++      if (format === 'csv') {
++        await exportCSV(filteredClasses, filteredParticipations);
++      } else if (format === 'excel') {
++        await exportExcel(filteredClasses, filteredParticipations, filteredHomework);
++      } else if (format === 'pdf') {
++        await exportPDF(filteredClasses, filteredParticipations, filteredHomework);
++      }
++
++      onClose();
++    } catch (e) {
++      console.error('[ExportModal] Error exporting:', e);
++      Alert.alert('Fehler', 'Der Export ist fehlgeschlagen.');
++    } finally {
++      setIsExporting(false);
++    }
++  };
++
++  const exportCSV = async (classes: any[], participations: any[]) => {
++    let csv = 'Klasse,Schüler ID,Vorname,Nachname,Teilnahmen\n';
++    
++    classes.forEach(cls => {
++      cls.students.forEach((student: any) => {
++        const studentParticipations = participations.filter(
++          p => p.classId === cls.id && p.studentId === student.id
++        ).length;
++        
++        csv += `"${cls.name}","${student.id}","${student.firstName}","${student.lastName}",${studentParticipations}\n`;
++      });
++    });
++
++    const fileUri = FileSystem.documentDirectory + 'Rork_Export.csv';
++    await FileSystem.writeAsStringAsync(fileUri, csv);
++    await shareFile(fileUri, 'text/csv');
++  };
++
++  const exportExcel = async (classes: any[], participations: any[], homework: any[]) => {
++    const wb = XLSX.utils.book_new();
++
++    // Participations Sheet
++    const partData = participations.map(p => {
++      const cls = classes.find(c => c.id === p.classId);
++      const student = cls?.students.find((s: any) => s.id === p.studentId);
++      return {
++        'Datum': new Date(p.date).toLocaleDateString(),
++        'Klasse': cls?.name || 'Unbekannt',
++        'Fach': p.subject,
++        'Name': student ? `${student.firstName} ${student.lastName}` : 'Unbekannt',
++        'Mitarbeit': p.rating,
++        'Grund': p.reason || '',
++      };
++    });
++    
++    if (partData.length > 0) {
++      const ws1 = XLSX.utils.json_to_sheet(partData);
++      XLSX.utils.book_append_sheet(wb, ws1, "Mitarbeit");
++    }
++
++    // Homework Sheet
++    const hwData = homework.map(h => {
++      const cls = classes.find(c => c.id === h.classId);
++      const student = cls?.students.find((s: any) => s.id === h.studentId);
++      return {
++        'Datum': new Date(h.date).toLocaleDateString(),
++        'Klasse': cls?.name || 'Unbekannt',
++        'Fach': h.subject,
++        'Name': student ? `${student.firstName} ${student.lastName}` : 'Unbekannt',
++        'Status': h.status,
++      };
++    });
++
++    if (hwData.length > 0) {
++      const ws2 = XLSX.utils.json_to_sheet(hwData);
++      XLSX.utils.book_append_sheet(wb, ws2, "Hausaufgaben");
++    }
++
++    const base64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' });
++    const fileUri = FileSystem.documentDirectory + 'Rork_Export.xlsx';
++    await FileSystem.writeAsStringAsync(fileUri, base64, { encoding: FileSystem.EncodingType.Base64 });
++    await shareFile(fileUri, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
++  };
++
++  const exportPDF = async (classes: any[], participations: any[], homework: any[]) => {
++    let html = `
++      <html>
++        <head>
++          <style>
++            body { font-family: -apple-system, sans-serif; color: #1c1c1e; padding: 20px; }
++            h1 { color: #0A7EA4; }
++            h2 { margin-top: 30px; border-bottom: 2px solid #eee; padding-bottom: 8px; }
++            table { width: 100%; border-collapse: collapse; margin-top: 10px; }
++            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
++            th { background-color: #f2f2f7; }
++          </style>
++        </head>
++        <body>
++          <h1>Rork Lehrer App Export</h1>
++          <p>Datum: ${new Date().toLocaleDateString()}</p>
++    `;
++
++    classes.forEach(cls => {
++      html += `<h2>Klasse: ${cls.name}</h2>`;
++      const classParts = participations.filter(p => p.classId === cls.id);
++      
++      if (classParts.length > 0) {
++        html += `
++          <h3>Mitarbeit</h3>
++          <table>
++            <tr><th>Datum</th><th>Fach</th><th>Schüler</th><th>Note</th></tr>
++        `;
++        classParts.forEach(p => {
++          const student = cls.students.find((s: any) => s.id === p.studentId);
++          html += `<tr>
++            <td>${new Date(p.date).toLocaleDateString()}</td>
++            <td>${p.subject}</td>
++            <td>${student ? student.firstName + ' ' + student.lastName : '-'}</td>
++            <td>${p.rating} ${p.reason ? `(${p.reason})` : ''}</td>
++          </tr>`;
++        });
++        html += `</table>`;
++      } else {
++        html += `<p>Keine Mitarbeitseinträge.</p>`;
++      }
++    });
++
++    html += `</body></html>`;
++
++    const { uri } = await Print.printToFileAsync({ html });
++    await shareFile(uri, 'application/pdf');
++  };
++
++  const shareFile = async (uri: string, mimeType: string) => {
++    if (await Sharing.isAvailableAsync()) {
++      await Sharing.shareAsync(uri, { mimeType, dialogTitle: 'Daten exportieren' });
++    } else {
++      Alert.alert('Fehler', 'Teilen ist auf diesem Gerät nicht verfügbar.');
++    }
++  };
++
++  return (
++    <Modal visible={visible} transparent animationType="slide">
++      <BlurView intensity={20} style={StyleSheet.absoluteFill} />
++      
++      <View style={styles.container}>
++        <View style={styles.content}>
++          <View style={styles.header}>
++            <Text style={styles.title}>Daten exportieren</Text>
++            <TouchableOpacity onPress={onClose} style={styles.closeButton}>
++              <X size={24} color={Colors.textSecondary} />
++            </TouchableOpacity>
++          </View>
++
++          <ScrollView style={styles.scrollArea}>
++            <Text style={styles.sectionTitle}>Format wählen</Text>
++            <View style={styles.formatRow}>
++              <TouchableOpacity
++                style={[styles.formatCard, format === 'pdf' && styles.formatCardActive]}
++                onPress={() => setFormat('pdf')}
++              >
++                <FileText size={24} color={format === 'pdf' ? Colors.primary : Colors.textSecondary} />
++                <Text style={[styles.formatText, format === 'pdf' && styles.formatTextActive]}>PDF</Text>
++              </TouchableOpacity>
++              
++              <TouchableOpacity
++                style={[styles.formatCard, format === 'excel' && styles.formatCardActive]}
++                onPress={() => setFormat('excel')}
++              >
++                <FileSpreadsheet size={24} color={format === 'excel' ? Colors.primary : Colors.textSecondary} />
++                <Text style={[styles.formatText, format === 'excel' && styles.formatTextActive]}>Excel</Text>
++              </TouchableOpacity>
++
++              <TouchableOpacity
++                style={[styles.formatCard, format === 'csv' && styles.formatCardActive]}
++                onPress={() => setFormat('csv')}
++              >
++                <FileJson size={24} color={format === 'csv' ? Colors.primary : Colors.textSecondary} />
++                <Text style={[styles.formatText, format === 'csv' && styles.formatTextActive]}>CSV</Text>
++              </TouchableOpacity>
++            </View>
++
++            <Text style={styles.sectionTitle}>Klassen (leer = alle)</Text>
++            <View style={styles.chipContainer}>
++              {data.classes.map(cls => (
++                <TouchableOpacity
++                  key={cls.id}
++                  style={[styles.chip, selectedClasses.includes(cls.id) && styles.chipActive]}
++                  onPress={() => toggleClass(cls.id)}
++                >
++                  <Text style={[styles.chipText, selectedClasses.includes(cls.id) && styles.chipTextActive]}>
++                    {cls.name}
++                  </Text>
++                </TouchableOpacity>
++              ))}
++            </View>
++
++            <Text style={styles.sectionTitle}>Fächer (leer = alle)</Text>
++            <View style={styles.chipContainer}>
++              {data.profile.subjects.map(sub => (
++                <TouchableOpacity
++                  key={sub}
++                  style={[styles.chip, selectedSubjects.includes(sub) && styles.chipActive]}
++                  onPress={() => toggleSubject(sub)}
++                >
++                  <Text style={[styles.chipText, selectedSubjects.includes(sub) && styles.chipTextActive]}>
++                    {sub}
++                  </Text>
++                </TouchableOpacity>
++              ))}
++            </View>
++          </ScrollView>
++
++          <View style={styles.footer}>
++            <AppButton
++              label={isExporting ? "Exportiere..." : "Export starten"}
++              onPress={handleExport}
++              disabled={isExporting}
++              leftIcon={isExporting ? <ActivityIndicator color={Colors.text} /> : <Check size={20} color={Colors.text} />}
++            />
++          </View>
++        </View>
++      </View>
++    </Modal>
++  );
++}
++
++const styles = StyleSheet.create({
++  container: {
++    flex: 1,
++    justifyContent: 'flex-end',
++  },
++  content: {
++    backgroundColor: Colors.background,
++    borderTopLeftRadius: UI.radius.xl,
++    borderTopRightRadius: UI.radius.xl,
++    height: '80%',
++    ...UI.shadows.lg,
++  },
++  header: {
++    flexDirection: 'row',
++    justifyContent: 'space-between',
++    alignItems: 'center',
++    padding: UI.spacing.lg,
++    borderBottomWidth: 1,
++    borderBottomColor: Colors.border,
++  },
++  title: {
++    ...UI.font.title,
++    color: Colors.text,
++  },
++  closeButton: {
++    padding: 4,
++  },
++  scrollArea: {
++    padding: UI.spacing.lg,
++  },
++  sectionTitle: {
++    ...UI.font.smallSemibold,
++    color: Colors.textSecondary,
++    textTransform: 'uppercase',
++    letterSpacing: 1,
++    marginBottom: 12,
++    marginTop: 8,
++  },
++  formatRow: {
++    flexDirection: 'row',
++    gap: 12,
++    marginBottom: UI.spacing.xl,
++  },
++  formatCard: {
++    flex: 1,
++    backgroundColor: Colors.white,
++    padding: 16,
++    borderRadius: UI.radius.lg,
++    alignItems: 'center',
++    borderWidth: 2,
++    borderColor: 'transparent',
++    ...UI.shadows.sm,
++  },
++  formatCardActive: {
++    borderColor: Colors.primary,
++    backgroundColor: '#E8F5E9', 
++  },
++  formatText: {
++    ...UI.font.smallSemibold,
++    color: Colors.textSecondary,
++    marginTop: 8,
++  },
++  formatTextActive: {
++    color: Colors.primary,
++  },
++  chipContainer: {
++    flexDirection: 'row',
++    flexWrap: 'wrap',
++    gap: 8,
++    marginBottom: UI.spacing.xl,
++  },
++  chip: {
++    backgroundColor: Colors.white,
++    paddingHorizontal: 16,
++    paddingVertical: 10,
++    borderRadius: 20,
++    ...UI.shadows.sm,
++  },
++  chipActive: {
++    backgroundColor: Colors.text,
++  },
++  chipText: {
++    ...UI.font.bodySemibold,
++    color: Colors.textSecondary,
++  },
++  chipTextActive: {
++    color: Colors.white,
++  },
++  footer: {
++    padding: UI.spacing.lg,
++    paddingBottom: 40,
++    borderTopWidth: 1,
++    borderTopColor: Colors.border,
++  },
++});
+diff --git a/expo/context/AppContext.tsx b/expo/context/AppContext.tsx
+index 11dc9bb..0133c54 100644
+--- a/expo/context/AppContext.tsx
++++ b/expo/context/AppContext.tsx
+@@ -75,6 +75,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
+   const [storedPinHash, setStoredPinHash] = useState<string>('');
+   const [pinLength, setPinLength] = useState<number>(6);
+   const [isLoading, setIsLoading] = useState<boolean>(true);
++  const [isPreviewMode, setIsPreviewMode] = useState<boolean>(false);
+ 
+   const currentPinRef = useRef<string>('');
+   const deviceSaltRef = useRef<string>('');
+@@ -246,16 +247,24 @@ export const [AppProvider, useApp] = createContextHook(() => {
+ 
+   const updateProfile = useCallback(
+     (profile: Partial<TeacherProfile>) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => ({
+         ...prev,
+         profile: { ...prev.profile, ...profile },
+       }));
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const updatePin = useCallback(
+     async (newPin: string) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return false;
++      }
+       const salt = deviceSaltRef.current || (await getOrCreateDeviceSalt());
+       deviceSaltRef.current = salt;
+       const newPinHash = hashPin(newPin, salt);
+@@ -304,6 +313,10 @@ export const [AppProvider, useApp] = createContextHook(() => {
+ 
+   const addStudent = useCallback(
+     (classId: string, firstName: string, lastName: string, note: string) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return null;
++      }
+       const student: Student = { id: generateId(), firstName, lastName, note };
+       save((prev) => ({
+         ...prev,
+@@ -313,11 +326,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+       }));
+       return student;
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const updateStudent = useCallback(
+     (classId: string, studentId: string, updates: Partial<Student>) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => ({
+         ...prev,
+         classes: prev.classes.map((c) =>
+@@ -332,11 +349,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         ),
+       }));
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const deleteStudent = useCallback(
+     (classId: string, studentId: string) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => ({
+         ...prev,
+         classes: prev.classes.map((c) =>
+@@ -350,11 +371,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         lateEntries: (prev.lateEntries || []).filter((l) => l.studentId !== studentId),
+       }));
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const startSession = useCallback(
+     (classId: string, subject: string) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return null;
++      }
+       const session: LessonSession = {
+         id: generateId(),
+         classId,
+@@ -377,6 +402,10 @@ export const [AppProvider, useApp] = createContextHook(() => {
+ 
+   const rateStudent = useCallback(
+     (studentId: string, rating: ParticipationRating, reason: ParticipationReason = null) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => {
+         if (!prev.activeSession) return prev;
+         const newRatings = { ...prev.activeSession.ratings, [studentId]: rating };
+@@ -402,11 +431,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         };
+       });
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const rateHomework = useCallback(
+     (studentId: string, status: HomeworkStatus) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => {
+         if (!prev.activeSession) return prev;
+         const newHomework = { ...prev.activeSession.homework, [studentId]: status };
+@@ -419,11 +452,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         };
+       });
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const markAbsent = useCallback(
+     (studentId: string, isAbsent: boolean) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => {
+         if (!prev.activeSession) return prev;
+         const newAbsent = { ...(prev.activeSession.absent || {}) };
+@@ -438,11 +475,15 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         };
+       });
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const markLate = useCallback(
+     (studentId: string, minutes: number | null) => {
++      if (isPreviewMode) {
++        Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++        return;
++      }
+       save((prev) => {
+         if (!prev.activeSession) return prev;
+         const newLate = { ...(prev.activeSession.lateMinutes || {}) };
+@@ -457,10 +498,14 @@ export const [AppProvider, useApp] = createContextHook(() => {
+         };
+       });
+     },
+-    [save]
++    [save, isPreviewMode]
+   );
+ 
+   const endSession = useCallback(async () => {
++    if (isPreviewMode) {
++      Alert.alert('Vorschaumodus', 'Im Vorschaumodus können keine Änderungen vorgenommen werden.');
++      return;
++    }
+     dismissLessonNotification();
+     save((prev) => {
+       if (!prev.activeSession) return prev;
+@@ -662,6 +707,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
+     await SecureStore.deleteItemAsync(PIN_HASH_KEY);
+     await SecureStore.deleteItemAsync(PIN_LENGTH_KEY);
+     await SecureStore.deleteItemAsync(PIN_HASH_VERSION_KEY);
++    await SecureStore.deleteItemAsync('teacher_app_subscription_data');
+     
+     currentPinRef.current = '';
+     setData(defaultData);
+@@ -826,5 +872,7 @@ export const [AppProvider, useApp] = createContextHook(() => {
+     createEncryptedBackup,
+     restoreEncryptedBackup,
+     listBackupFiles,
++    isPreviewMode,
++    setIsPreviewMode,
+   };
+ });
+diff --git a/expo/hooks/usePurchases.ts b/expo/hooks/usePurchases.ts
+new file mode 100644
+index 0000000..595251d
+--- /dev/null
++++ b/expo/hooks/usePurchases.ts
+@@ -0,0 +1,191 @@
++import { useState, useEffect, useCallback } from 'react';
++import { Platform, Alert } from 'react-native';
++import * as SecureStore from 'expo-secure-store';
++import CryptoJS from 'crypto-js';
++
++// MOCKED for Expo Go testing.
++// In a real build, we would import 'react-native-iap' here.
++const ITEM_SKUS = Platform.select({
++  ios: ['com.rork.teacher.monthly'],
++  android: ['com.rork.teacher.monthly'],
++  default: ['com.rork.teacher.monthly'],
++});
++
++const SUB_DATA_KEY = 'teacher_app_subscription_data';
++
++export interface SubscriptionData {
++  status: 'active' | 'expired';
++  expiresAt: number;
++  lastKnownTime: number;
++  lastOnlineVerification: number;
++  storeReceipt: string | null;
++}
++
++export function usePurchases() {
++  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
++  const [isProcessing, setIsProcessing] = useState(false);
++  const [hasActiveSubscription, setHasActiveSubscription] = useState<boolean | null>(null);
++
++  // Initial Check from SecureStore
++  const checkLocalSubscription = useCallback(async () => {
++    try {
++      const now = Date.now();
++      const dataStr = await SecureStore.getItemAsync(SUB_DATA_KEY);
++      
++      if (dataStr) {
++        const data: SubscriptionData = JSON.parse(dataStr);
++        if (now < data.lastKnownTime) {
++          console.warn('[IAP] Time manipulation detected! Current time is before last known time.');
++        }
++        if (data.status === 'active' && now < data.expiresAt) {
++          setHasActiveSubscription(true);
++          return; // Valid subscription
++        }
++      }
++
++      // No active sub
++      setHasActiveSubscription(false);
++    } catch (e) {
++      console.error('[IAP] Local check failed', e);
++      setHasActiveSubscription(false);
++    }
++  }, []);
++
++  useEffect(() => {
++    checkLocalSubscription();
++  }, [checkLocalSubscription]);
++
++  // Setup IAP Connection (MOCKED)
++  useEffect(() => {
++    const setupIAP = async () => {
++      try {
++        // Mocking fetching products
++        setTimeout(() => {
++          setSubscriptions([
++            {
++              productId: 'com.rork.teacher.monthly',
++              title: 'Rork Premium',
++              description: 'Monatsabo für Rork',
++              localizedPrice: '2,99 €',
++              currency: 'EUR',
++              price: '2.99',
++            } as any,
++          ]);
++        }, 1000);
++      } catch (err) {
++        console.warn('[IAP] Init error', err);
++      }
++    };
++
++    setupIAP();
++  }, []);
++
++  const purchaseSubscription = async (sku: string) => {
++    try {
++      setIsProcessing(true);
++      // Simulate native payment sheet delay
++      await new Promise(resolve => setTimeout(resolve, 2000));
++      
++      const expiresAt = Date.now() + 31 * 24 * 60 * 60 * 1000; 
++      const subData: SubscriptionData = {
++        status: 'active',
++        expiresAt,
++        lastKnownTime: Date.now(),
++        lastOnlineVerification: Date.now(),
++        storeReceipt: 'MOCK_RECEIPT_EXPO_GO',
++      };
++
++      await SecureStore.setItemAsync(SUB_DATA_KEY, JSON.stringify(subData));
++      setHasActiveSubscription(true);
++      Alert.alert('Erfolg', 'Mock-Kauf in Expo Go war erfolgreich!');
++    } catch (err: any) {
++      Alert.alert('Kauf abgebrochen', 'Der Kauf konnte nicht abgeschlossen werden.');
++    } finally {
++      setIsProcessing(false);
++    }
++  };
++
++  const restorePurchases = async () => {
++    try {
++      setIsProcessing(true);
++      await new Promise(resolve => setTimeout(resolve, 1500));
++      
++      Alert.alert('Hinweis', 'In Expo Go gibt es keine nativen Käufe zum Wiederherstellen.');
++    } catch (err) {
++      console.error('[IAP] Restore failed', err);
++    } finally {
++      setIsProcessing(false);
++    }
++  };
++
++  const redeemPromoCode = async (code: string): Promise<boolean> => {
++    setIsProcessing(true);
++    
++    // Slight artificial delay to prevent brute-forcing
++    await new Promise(resolve => setTimeout(resolve, 800));
++    
++    try {
++      const cleanCode = code.trim().toUpperCase();
++      const parts = cleanCode.split('-');
++      
++      // Expected format: RORK-[DURATION]-[SIGNATURE]
++      if (parts.length !== 3 || parts[0] !== 'RORK') {
++        setIsProcessing(false);
++        return false;
++      }
++
++      const duration = parts[1];
++      const signature = parts[2];
++
++      // Obfuscated secret construction
++      const secret = ['RORK', '_OFFLINE', '_SEC', '_99X'].join('');
++      
++      // Calculate expected signature
++      const expectedSignature = CryptoJS.SHA256(secret + duration)
++        .toString(CryptoJS.enc.Hex)
++        .substring(0, 6)
++        .toUpperCase();
++
++      if (signature !== expectedSignature) {
++        setIsProcessing(false);
++        return false;
++      }
++
++      let daysToAdd = 0;
++      if (duration === '7D') daysToAdd = 7;
++      else if (duration === '30D') daysToAdd = 30;
++      else if (duration === 'LIFE') daysToAdd = 365 * 100;
++      else {
++        setIsProcessing(false);
++        return false;
++      }
++
++      const expiresAt = Date.now() + daysToAdd * 24 * 60 * 60 * 1000;
++      const subData: SubscriptionData = {
++        status: 'active',
++        expiresAt,
++        lastKnownTime: Date.now(),
++        lastOnlineVerification: Date.now(),
++        storeReceipt: 'PROMO_CODE_' + duration,
++      };
++      
++      await SecureStore.setItemAsync(SUB_DATA_KEY, JSON.stringify(subData));
++      setHasActiveSubscription(true);
++      return true;
++    } catch (e) {
++      console.error('[IAP] Promo code error', e);
++      return false;
++    } finally {
++      setIsProcessing(false);
++    }
++  };
++
++  return {
++    subscriptions,
++    purchaseSubscription,
++    restorePurchases,
++    redeemPromoCode,
++    isProcessing,
++    hasActiveSubscription,
++  };
++}
+diff --git a/expo/package.json b/expo/package.json
+index c515d27..2239f2e 100644
+--- a/expo/package.json
++++ b/expo/package.json
+@@ -6,7 +6,9 @@
+     "start": "bunx rork start -p jd2787fkshc9hio4mnysv --tunnel",
+     "start-web": "bunx rork start -p jd2787fkshc9hio4mnysv --web --tunnel",
+     "start-web-dev": "DEBUG=expo* bunx rork start -p jd2787fkshc9hio4mnysv --web --tunnel",
+-    "lint": "expo lint"
++    "lint": "expo lint",
++    "android": "expo run:android",
++    "ios": "expo run:ios"
+   },
+   "dependencies": {
+     "@expo/vector-icons": "^15.0.3",
+@@ -14,7 +16,6 @@
+     "@react-native-async-storage/async-storage": "2.2.0",
+     "@rork-ai/toolkit-sdk": "^0.2.51",
+     "@stardazed/streams-text-encoding": "^1.0.2",
+-
+     "@types/crypto-js": "^4.2.2",
+     "@ungap/structured-clone": "^1.3.0",
+     "crypto-js": "^4.2.0",
+@@ -38,6 +39,7 @@
+     "expo-print": "~15.0.8",
+     "expo-router": "~6.0.17",
+     "expo-secure-store": "~15.0.8",
++    "expo-sharing": "~14.0.8",
+     "expo-splash-screen": "~31.0.12",
+     "expo-status-bar": "~3.0.9",
+     "expo-symbols": "~1.0.8",
+@@ -48,11 +50,13 @@
+     "react-dom": "19.1.0",
+     "react-native": "0.81.5",
+     "react-native-gesture-handler": "~2.28.0",
++    "react-native-iap": "^15.2.0",
+     "react-native-safe-area-context": "~5.6.0",
+     "react-native-screens": "~4.16.0",
+     "react-native-svg": "15.12.1",
+     "react-native-web": "^0.21.0",
+     "react-native-worklets": "0.5.1",
++    "xlsx": "^0.18.5",
+     "zod": "^4.3.6",
+     "zustand": "^5.0.2"
+   },
+@@ -65,4 +69,4 @@
+     "typescript": "~5.9.2"
+   },
+   "private": true
+-}
+\ No newline at end of file
++}
