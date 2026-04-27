@@ -227,7 +227,7 @@ export default function LessonScreen() {
           label="Unterricht starten"
           onPress={handleStartLesson}
           disabled={!selectedClassId || !selectedSubject}
-          leftIcon={<Play size={17} color={Colors.primary} strokeWidth={2.5} />}
+          leftIcon={<Play size={17} color={Colors.white} strokeWidth={2.5} />}
           style={styles.startBtn}
         />
       </Animated.View>
@@ -331,10 +331,16 @@ const styles = StyleSheet.create({
     borderRadius: UI.radius.xl,
     padding: UI.spacing.lg,
     marginBottom: UI.spacing.sm,
-    ...UI.shadows.lg,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.10, shadowRadius: 20 },
+      android: { elevation: 5 },
+      default: {},
+    }),
   },
   classCardSelected: {
-    // We intentionally keep the card visually stable
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+    backgroundColor: Colors.primaryLight,
   },
   classLeft: {
     flexDirection: 'row',
@@ -344,10 +350,13 @@ const styles = StyleSheet.create({
   classIcon: {
     width: 42,
     height: 42,
-    borderRadius: 14,          // RADIUS.md
+    borderRadius: 14,
     backgroundColor: Colors.neutralLight,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  classIconSelected: {
+    backgroundColor: Colors.primary,
   },
   className: {
     ...UI.font.bodySemibold,
@@ -378,14 +387,19 @@ const styles = StyleSheet.create({
     ...UI.shadows.sm,
   },
   chipActive: {
-    // Keep background stable, visually it floats
+    backgroundColor: Colors.primary,
+    ...Platform.select({
+      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 10 },
+      android: { elevation: 6 },
+      default: {},
+    }),
   },
   chipText: {
     ...UI.font.smallSemibold,
     color: Colors.textSecondary,
   },
   chipTextActive: {
-    color: Colors.text,
+    color: Colors.white,
     fontWeight: '700' as const,
   },
   startBtn: { marginTop: 4 },

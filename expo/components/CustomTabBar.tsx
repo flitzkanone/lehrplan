@@ -72,13 +72,14 @@ function TabBarButton({
       style={styles.tabButton}
     >
       <Animated.View style={[styles.tabContent, { transform: [{ scale: scaleAnim }] }]}>
-        <IconComponent 
-          size={24} 
-          color={color} 
-          strokeWidth={isFocused ? 2 : 1.7} 
-          style={{ opacity: isFocused ? 1 : 0.8 }}
-        />
-        <Text style={[styles.tabLabel, { color, opacity: isFocused ? 1 : 0.8 }]}>
+        <View style={[styles.tabIconWrap, isFocused && styles.tabIconWrapActive]}>
+          <IconComponent 
+            size={22} 
+            color={color} 
+            strokeWidth={isFocused ? 2.2 : 1.7} 
+          />
+        </View>
+        <Text style={[styles.tabLabel, { color, opacity: isFocused ? 1 : 0.65 }]}>
           {label}
         </Text>
       </Animated.View>
@@ -95,7 +96,7 @@ export function CustomTabBar({ state, descriptors, navigation }: BottomTabBarPro
   return (
     <View style={[styles.container, { bottom: bottomDistance }]}>
       <BlurView 
-        intensity={Platform.OS === 'ios' ? 40 : 80} 
+        intensity={Platform.OS === 'ios' ? 60 : 100} 
         tint="light" 
         style={styles.blurContainer}
       >
@@ -145,17 +146,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 16,
     right: 16,
-    // borderRadius applies to the outer view to clip the blur on Android
     borderRadius: 999,
     ...Platform.select({
       ios: {
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.12,
-        shadowRadius: 16,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.18,
+        shadowRadius: 24,
       },
       android: {
-        elevation: 10,
+        elevation: 12,
       },
     }),
   },
@@ -163,15 +163,15 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     overflow: 'hidden',
     backgroundColor: Platform.select({
-      ios: 'rgba(255, 255, 255, 0.4)',
-      android: 'rgba(255, 255, 255, 0.95)', // Android blur might not be reliable, give it a solid fallback
+      ios: 'rgba(255, 255, 255, 0.55)',
+      android: 'rgba(255, 255, 255, 0.97)',
     }),
     borderWidth: Platform.select({ ios: 0.5, android: 0 }),
-    borderColor: 'rgba(255, 255, 255, 0.3)',
+    borderColor: 'rgba(255, 255, 255, 0.5)',
   },
   tabBar: {
     flexDirection: 'row',
-    height: 60,
+    height: 64,
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 8,
@@ -185,10 +185,20 @@ const styles = StyleSheet.create({
   tabContent: {
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 3,
+  },
+  tabIconWrap: {
+    width: 44,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabIconWrapActive: {
+    backgroundColor: 'rgba(22,23,26,0.08)',
   },
   tabLabel: {
     fontSize: 10,
     fontWeight: '600',
-    marginTop: 4,
   },
 });

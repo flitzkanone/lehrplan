@@ -802,14 +802,27 @@ const styles = StyleSheet.create({
   chip: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
     paddingHorizontal: 14, paddingVertical: 9,
-    borderRadius: 100, backgroundColor: Colors.white, borderWidth: 1, borderColor: Colors.cardBorder, // RADIUS.pill
+    borderRadius: 100,
+    backgroundColor: Colors.white,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.07, shadowRadius: 8 },
+      android: { elevation: 2 },
+      default: {},
+    }),
   },
-  chipActive: { backgroundColor: Colors.primary },
-  chipText: { ...UI.font.caption, fontWeight: '600' as const, color: Colors.text },
+  chipActive: {
+    backgroundColor: Colors.primary,
+    ...Platform.select({
+      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 12 },
+      android: { elevation: 6 },
+      default: {},
+    }),
+  },
+  chipText: { ...UI.font.caption, fontWeight: '600' as const, color: Colors.textSecondary },
   chipTextActive: { color: Colors.white },
   list: { flex: 1 },
-  listContent: { padding: UI.spacing.screenMargin, gap: UI.spacing.sm, paddingBottom: 130 },
-  emptyContainer: { alignItems: 'center', paddingTop: 60 },
-  emptyTitle: { ...UI.font.headline, color: Colors.text, marginBottom: 4 },
+  listContent: { padding: UI.spacing.screenMargin, gap: 12, paddingBottom: 130 },
+  emptyContainer: { alignItems: 'center', paddingTop: 80 },
+  emptyTitle: { ...UI.font.headline, color: Colors.text, marginBottom: 6 },
   emptySubtitle: { ...UI.font.body, color: Colors.textSecondary },
 });

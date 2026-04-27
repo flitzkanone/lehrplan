@@ -317,7 +317,11 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderRadius: UI.card.radius,
     padding: UI.card.padding,
-    ...UI.shadows.sm,
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.08, shadowRadius: 16 },
+      android: { elevation: 5 },
+      default: {},
+    }),
   },
   classLeft: {
     flexDirection: 'row',
@@ -351,47 +355,56 @@ const styles = StyleSheet.create({
     padding: 6,
   },
   separator: {
-    height: 8,
+    height: 12,
   },
   emptyContainer: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingTop: 80,
+    paddingTop: 60,
+    paddingHorizontal: 8,
   },
   emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: Colors.neutralLight,
+    width: 68,
+    height: 68,
+    borderRadius: 34,
+    backgroundColor: Colors.primaryLight,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 18,
+    marginBottom: 20,
+    ...Platform.select({
+      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.12, shadowRadius: 12 },
+      android: { elevation: 3 },
+      default: {},
+    }),
   },
   emptyTitle: {
-    fontSize: 17,
-    fontWeight: '600' as const,
+    fontSize: 18,
+    fontWeight: '700' as const,
     color: Colors.text,
-    marginBottom: 6,
+    marginBottom: 8,
+    letterSpacing: -0.3,
   },
   emptySubtitle: {
     fontSize: 14,
     color: Colors.textSecondary,
-    textAlign: 'center',
+    textAlign: 'center' as const,
+    lineHeight: 20,
+    maxWidth: 260,
   },
   fabWrapper: {
     position: 'absolute',
-    bottom: 95, // Float above the tab bar
+    bottom: 100,
     right: 24,
-    borderRadius: 30, // Make it completely round
+    borderRadius: 32,
     ...Platform.select({
       ios: {
-        shadowColor: Colors.primary,
+        shadowColor: '#000',
         shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.35,
-        shadowRadius: 20,
+        shadowOpacity: 0.22,
+        shadowRadius: 24,
       },
-      android: { elevation: 8 },
+      android: { elevation: 12 },
     }),
   },
   fabBlur: {
@@ -404,7 +417,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: Colors.primary + 'E6', // 90% opacity primary color for iOS blur feel
+    backgroundColor: Colors.primary,
   },
   modalOverlay: {
     flex: 1,

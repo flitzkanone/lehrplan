@@ -1,9 +1,9 @@
 import React, { useRef } from 'react';
-import { Animated, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
+import { Animated, Platform, Pressable, StyleSheet, Text, ViewStyle } from 'react-native';
 import Colors from '@/constants/colors';
 import { UI } from '@/constants/ui';
 
-type Variant = 'primary' | 'secondary' | 'ghost';
+type Variant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
 interface AppButtonProps {
   label: string;
@@ -25,7 +25,7 @@ export default function AppButton({
   const scale = useRef(new Animated.Value(1)).current;
 
   const onPressIn = () => {
-    Animated.spring(scale, { toValue: 0.98, useNativeDriver: true, friction: 8, tension: 280 }).start();
+    Animated.spring(scale, { toValue: 0.97, useNativeDriver: true, friction: 8, tension: 280 }).start();
   };
   const onPressOut = () => {
     Animated.spring(scale, { toValue: 1, useNativeDriver: true, friction: 8, tension: 280 }).start();
@@ -41,7 +41,14 @@ export default function AppButton({
         style={[styles.base, styles[variant], disabled && styles.disabled]}
       >
         {leftIcon}
-        <Text style={[styles.label, variant !== 'primary' && styles.labelAlt]}>{label}</Text>
+        <Text style={[
+          styles.label,
+          variant === 'secondary' && styles.labelSecondary,
+          variant === 'ghost' && styles.labelGhost,
+          variant === 'danger' && styles.labelDanger,
+        ]}>
+          {label}
+        </Text>
       </Pressable>
     </Animated.View>
   );
@@ -58,25 +65,51 @@ const styles = StyleSheet.create({
     gap: UI.spacing.sm,
   },
   primary: {
-    backgroundColor: Colors.white,
-    ...UI.shadows.lg,
+    backgroundColor: Colors.primary,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.22,
+        shadowRadius: 20,
+      },
+      android: { elevation: 8 },
+      default: {},
+    }),
   },
   secondary: {
-    backgroundColor: Colors.primaryLight,
-    borderWidth: 1,
-    borderColor: Colors.divider,
+    backgroundColor: Colors.inputBg,
   },
   ghost: {
     backgroundColor: 'transparent',
   },
+  danger: {
+    backgroundColor: Colors.negative,
+    ...Platform.select({
+      ios: {
+        shadowColor: Colors.negative,
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.25,
+        shadowRadius: 14,
+      },
+      android: { elevation: 6 },
+      default: {},
+    }),
+  },
   label: {
-    color: Colors.text,
+    color: Colors.white,
     ...UI.font.bodySemibold,
   },
-  labelAlt: {
+  labelSecondary: {
     color: Colors.text,
   },
+  labelGhost: {
+    color: Colors.text,
+  },
+  labelDanger: {
+    color: Colors.white,
+  },
   disabled: {
-    opacity: 0.45,
+    opacity: 0.4,
   },
 });

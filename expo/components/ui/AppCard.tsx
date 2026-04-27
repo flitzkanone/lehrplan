@@ -12,6 +12,15 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.white,
     borderRadius: UI.card.radius,
     padding: UI.card.padding,
-    ...UI.shadows.sm,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.10,
+        shadowRadius: 24,
+      },
+      android: { elevation: 6 },
+      default: {},
+    }),
   },
 });

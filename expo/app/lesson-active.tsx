@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Circle, CheckCircle, Users, ThumbsUp, HandHelping, EyeOff, Volume2, FileX, BookOpen, Check, X, Clock, Search, UserX, Timer, Activity } from 'lucide-react-native';
+import { Circle, CheckCircle, Users, ThumbsUp, HandHelping, EyeOff, Volume2, FileX, BookOpen, Check, X, Clock, Search, UserX, Timer } from 'lucide-react-native';
 import * as Haptics from 'expo-haptics';
 import { activateKeepAwake, deactivateKeepAwake } from 'expo-keep-awake';
 import Colors from '@/constants/colors';
@@ -344,104 +344,6 @@ function getHomeworkLabel(status: HomeworkStatus): string {
   }
 }
 
-// ---------------------------------------------------------------------------
-// In-App Live Activity Banner (fallback for ActivityKit / Foreground Service)
-// ---------------------------------------------------------------------------
-function InAppActivityBanner({
-  timer,
-  ratedCount,
-  totalCount,
-  className,
-}: {
-  timer: string;
-  ratedCount: number;
-  totalCount: number;
-  className: string;
-}) {
-  const slideAnim = useRef(new Animated.Value(-80)).current;
-  const opacityAnim = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    Animated.parallel([
-      Animated.spring(slideAnim, { toValue: 0, friction: 9, tension: 80, useNativeDriver: true }),
-      Animated.timing(opacityAnim, { toValue: 1, duration: 300, useNativeDriver: true }),
-    ]).start();
-  }, [slideAnim, opacityAnim]);
-
-  const progress = totalCount > 0 ? ratedCount / totalCount : 0;
-  const progressAnim = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(progressAnim, { toValue: progress, duration: 400, useNativeDriver: false }).start();
-  }, [progress, progressAnim]);
-
-  return (
-    <Animated.View
-      style={[
-        bannerStyles.wrap,
-        { transform: [{ translateY: slideAnim }], opacity: opacityAnim },
-      ]}
-    >
-      <View style={bannerStyles.left}>
-        <View style={bannerStyles.dot} />
-        <View>
-          <Text style={bannerStyles.label}>Unterricht läuft</Text>
-          <Text style={bannerStyles.className} numberOfLines={1}>{className}</Text>
-        </View>
-      </View>
-      <View style={bannerStyles.right}>
-        <Text style={bannerStyles.timer}>{timer}</Text>
-        <Text style={bannerStyles.count}>{ratedCount}/{totalCount}</Text>
-      </View>
-      <Animated.View
-        style={[
-          bannerStyles.progressBar,
-          {
-            width: progressAnim.interpolate({
-              inputRange: [0, 1],
-              outputRange: ['0%', '100%'],
-              extrapolate: 'clamp',
-            }),
-          },
-        ]}
-      />
-    </Animated.View>
-  );
-}
-
-const bannerStyles = StyleSheet.create({
-  wrap: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderRadius: 18,
-    backgroundColor: Colors.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    overflow: 'hidden',
-    ...Platform.select({
-      ios: { shadowColor: Colors.primary, shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.35, shadowRadius: 16 },
-      android: { elevation: 10 },
-      default: {},
-    }),
-  },
-  left: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1 },
-  dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#A8F0C8' },
-  label: { fontSize: 11, fontWeight: '600', color: 'rgba(255,255,255,0.75)', letterSpacing: 0.3 },
-  className: { fontSize: 14, fontWeight: '700', color: '#FFFFFF', marginTop: 1 },
-  right: { alignItems: 'flex-end', gap: 1 },
-  timer: { fontSize: 18, fontWeight: '700', color: '#FFFFFF', fontVariant: ['tabular-nums'] as any },
-  count: { fontSize: 11, fontWeight: '500', color: 'rgba(255,255,255,0.7)' },
-  progressBar: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    height: 3,
-    backgroundColor: 'rgba(255,255,255,0.4)',
-    borderRadius: 2,
-  },
-});
 
 // ---------------------------------------------------------------------------
 // Main Screen
@@ -687,14 +589,6 @@ export default function LessonActiveScreen() {
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.container} edges={['top']}>
-        {/* Live Activity Banner */}
-        <InAppActivityBanner
-          timer={timerStr}
-          ratedCount={ratedCount}
-          totalCount={activeTotal}
-          className={currentClass.name}
-        />
-
         <View style={styles.header}>
           <View style={styles.headerTop}>
             <View style={styles.headerLeft}>
